@@ -371,7 +371,7 @@ int modi_joint_canevo::Impl::SendRxPdo1(float target_vel_rpm) {
   f.dlc = bus_->LenToDlc(f.len);
 
   WriteU16LE(f.data + 0, ConsumeControlword());
-  WriteF32LE(f.data + 4, target_vel_rpm);
+  WriteF32LE(f.data + 2, target_vel_rpm);
 
   return bus_->EnqueueTx(f);
 }
