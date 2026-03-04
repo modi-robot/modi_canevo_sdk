@@ -24,10 +24,8 @@
  *   j2.NrtInit(bus, 2);
  *
  *   // 配置模式并使能
- *   j1.RtSetWorkMode(CanEvoMode::kCsp);
- *   j1.RtEnable();
- *   j2.RtSetWorkMode(CanEvoMode::kCsp);
- *   j2.RtEnable();
+ *   j1.RtEnable(CanEvoMode::kCsp);
+ *   j2.RtEnable(CanEvoMode::kCsp);
  *
  *   // 实时控制循环
  *   uint8_t cnt = 0;
@@ -305,7 +303,7 @@ class modi_joint_canevo {
    *
    * 所有 set*Target* 函数仅将帧入队（SPSC 无锁队列），
    * 由内部 Tx 线程异步执行 write()，不阻塞调用者。
-   * controlword 由 SDK 内部缓存自动管理（通过 RtEnable/RtDisable/RtSetWorkMode
+   * controlword 由 SDK 内部缓存自动管理（通过 RtEnable/RtDisable
    * 等修改）。
    *
    * 典型调用顺序：
@@ -370,14 +368,17 @@ class modi_joint_canevo {
    * ============================================================ */
 
   /**
-   * @brief 伺服使能（设置控制字 bit1 = 1） [实时接口]
+   * @brief 伺服使能并设置工作模式（设置控制字 bit1 = 1 和 bit12~bit15）
+   * [实时接口]
+   * @param mode 目标工作模式
    * @note 非阻塞，修改内部 controlword 缓存，下次 PDO 发送时生效
    * @return CanEvoError::kOk 成功，NotInitialized 未初始化
    */
-  int RtEnable();
+  int RtEnable(const CanEvoMode mode);
 
   /**
-   * @brief 伺服失能（设置控制字 bit1 = 0） [实时接口]
+   * @brief 伺服失能（先切换到 CSP 模式，再设置控制字 bit1 = 0） [实时接口]
+   * @note 非阻塞，修改内部 controlword 缓存，下次 PDO 发送时生效
    * @return CanEvoError::kOk 成功，NotInitialized 未初始化
    */
   int RtDisable();
@@ -388,13 +389,6 @@ class modi_joint_canevo {
    * @return CanEvoError::kOk 成功，NotInitialized 未初始化
    */
   int RtClearFault();
-
-  /**
-   * @brief 设置工作模式（控制字 bit12~bit15） [实时接口]
-   * @param mode 目标模式
-   * @return CanEvoError::kOk 成功，NotInitialized 未初始化
-   */
-  int RtSetWorkMode(const CanEvoMode mode);
 
   /**
    * @brief 触发急停（设置控制字 bit2 = 1） [实时接口]
@@ -417,27 +411,24 @@ class modi_joint_canevo {
    */
 
   /**
-   * @brief SDO 方式伺服使能（设置控制字 bit1 = 1） [非实时接口]
-   * @note 通过 SDO 修改控制字 bit1=1，每次只修改使能位，不改变其他位
-   *       操作完成后控制字立即生效，无需等待 PDO 发送
+   * @brief SDO 方式伺服使能并设置工作模式（设置控制字 bit1 = 1 和 bit12~bit15）
+   * [非实时接口]
+   * @param mode 目标工作模式
+   * @note 通过 SDO 修改控制字 bit1=1 和
+   * bit12-15，操作完成后控制字立即生效，无需等待 PDO 发送
    * @return CanEvoError::kOk 成功
    */
-  int NrtEnable();
+  int NrtEnable(const CanEvoMode mode);
 
   /**
-   * @brief SDO 方式伺服失能（设置控制字 bit1 = 0） [非实时接口]
-   * @note 通过 SDO 修改控制字 bit1=0，每次只修改使能位，不改变其他位
+   * @brief SDO 方式伺服失能（先切换到 CSP 模式，再设置控制字 bit1 = 0）
+   * [非实时接口]
+   * @note 通过 SDO 修改控制字，先设置模式为
+   * CSP（bit12~bit15），再失能（bit1=0） 操作完成后控制字立即生效，无需等待 PDO
+   * 发送
    * @return CanEvoError::kOk 成功
    */
   int NrtDisable();
-
-  /**
-   * @brief SDO 方式设置工作模式（设置控制字 bit12~bit15） [非实时接口]
-   * @param mode 工作模式
-   * @note 通过 SDO 修改控制字 bit12-15，每次只修改模式位，不改变其他位
-   * @return CanEvoError::kOk 成功
-   */
-  int NrtSetWorkMode(const CanEvoMode mode);
 
   /**
    * @brief SDO 方式清除故障（触发控制字 bit0 单周期脉冲） [非实时接口]

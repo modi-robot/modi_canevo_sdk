@@ -61,8 +61,7 @@ int main() {
     joint.NrtInit(bus, 1);  // node_id = 1
     
     // 3. 设置工作模式并使能
-    joint.RtSetWorkMode(CanEvoMode::kCsp);
-    joint.RtEnable();
+    joint.RtEnable(CanEvoMode::kCsp);
     
     // 4. 实时控制循环
     uint8_t sync_counter = 0;

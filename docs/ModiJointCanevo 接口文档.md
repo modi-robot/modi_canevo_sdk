@@ -259,10 +259,9 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
-| 12 | `RtEnable()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | 伺服使能（设置控制字 bit1 = 1） [实时接口] |
-| 13 | `RtDisable()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | 伺服失能（设置控制字 bit1 = 0） [实时接口] |
+| 12 | `RtEnable(mode)` | `mode`: 目标模式（const CanEvoMode） | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | 伺服使能并设置工作模式（设置控制字 bit1 = 1 和 bit12~bit15） [实时接口] |
+| 13 | `RtDisable()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | 伺服失能（先切换到 CSP 模式，再设置控制字 bit1 = 0）。非阻塞，修改内部 controlword 缓存，下次 PDO 发送时生效 [实时接口] |
 | 14 | `RtClearFault()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | 清除故障（触发控制字 bit0 单周期脉冲，下次 PDO 发送时 bit0=1，之后自动清零） [实时接口] |
-| 15 | `RtSetWorkMode(mode)` | `mode`: 目标模式（const CanEvoMode） | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | 设置工作模式（控制字 bit12~bit15） [实时接口] |
 | 16 | `RtEstop()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | 触发急停（设置控制字 bit2 = 1） [实时接口] |
 | 17 | `RtClearEstop()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | 清除急停（设置控制字 bit2 = 0） [实时接口] |
 
@@ -377,16 +376,15 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
-| 76 | `NrtEnable()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | SDO 方式伺服使能（设置控制字 bit1 = 1）。通过 SDO 修改控制字 bit1=1，每次只修改使能位，不改变其他位。操作完成后控制字立即生效，无需等待 PDO 发送 [非实时接口] |
-| 77 | `NrtDisable()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | SDO 方式伺服失能（设置控制字 bit1 = 0）。通过 SDO 修改控制字 bit1=0，每次只修改使能位，不改变其他位 [非实时接口] |
-| 78 | `NrtSetWorkMode(mode)` | `mode`: 目标模式（const CanEvoMode） | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | SDO 方式设置工作模式（设置控制字 bit12~bit15）。通过 SDO 修改控制字 bit12-15，每次只修改模式位，不改变其他位 [非实时接口] |
+| 76 | `NrtEnable(mode)` | `mode`: 目标模式（const CanEvoMode） | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | SDO 方式伺服使能并设置工作模式（设置控制字 bit1 = 1 和 bit12~bit15）。通过 SDO 修改控制字，操作完成后控制字立即生效，无需等待 PDO 发送 [非实时接口] |
+| 77 | `NrtDisable()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | SDO 方式伺服失能（先切换到 CSP 模式，再设置控制字 bit1 = 0）。通过 SDO 修改控制字，先设置模式为 CSP（bit12~bit15），再失能（bit1=0），操作完成后控制字立即生效，无需等待 PDO 发送 [非实时接口] |
 | 79 | `NrtClearFault()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | SDO 方式清除故障（触发控制字 bit0 单周期脉冲）。通过 SDO 发送单周期脉冲(bit0=1然后自动清0)，仅在故障状态时有效 [非实时接口] |
 | 80 | `NrtEstop()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | SDO 方式触发急停（设置控制字 bit2 = 1）。通过 SDO 修改控制字 bit2=1，每次只修改急停位，不改变其他位 [非实时接口] |
 | 81 | `NrtClearEstop()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | SDO 方式清除急停（设置控制字 bit2 = 0）。通过 SDO 修改控制字 bit2=0，每次只修改急停位，不改变其他位 [非实时接口] |
 
 > **与 Rt 接口的区别**：
-> - **Rt 接口**（如 `RtEnable()`）：修改内部 controlword 缓存（非阻塞），下次 PDO 帧发送时自动携带生效，适用于实时控制循环
-> - **Nrt 接口**（如 `NrtEnable()`）：通过 SDO 直接读写控制字（阻塞），操作完成后立即生效，适用于初始化/配置阶段或需要立即生效的场景
+> - **Rt 接口**（如 `RtEnable(mode)`）：修改内部 controlword 缓存（非阻塞），下次 PDO 帧发送时自动携带生效，适用于实时控制循环
+> - **Nrt 接口**（如 `NrtEnable(mode)`）：通过 SDO 直接读写控制字（阻塞），操作完成后立即生效，适用于初始化/配置阶段或需要立即生效的场景
 
 ---
 
@@ -464,7 +462,7 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 | 0x20 | 0x08 | 电机温度 | int16 | R | `NrtGetMotorTemperature()` |
 | 0x20 | 0x09 | 减速器温度 | int16 | R | `NrtGetGearboxTemperature()` |
 | 0x20 | 0x0A | 电角度 | uint16 | R | `NrtGetElectricalAngle()` |
-| 0x21 | 0x00 | 控制字 | uint16 | RW | `NrtEnable()` / `NrtDisable()` / `NrtSetWorkMode()` / `NrtClearFault()` / `NrtEstop()` / `NrtClearEstop()`（SDO方式，阻塞）<br>或通过 `RtEnable()` / `RtDisable()` 等（PDO方式，非阻塞） |
+| 0x21 | 0x00 | 控制字 | uint16 | RW | `NrtEnable(mode)` / `NrtDisable()` / `NrtClearFault()` / `NrtEstop()` / `NrtClearEstop()`（SDO方式，阻塞）<br>或通过 `RtEnable(mode)` / `RtDisable()` 等（PDO方式，非阻塞） |
 | 0x21 | 0x02 | PP模式目标位置 | float | RW | `NrtSetPpTargetPosition()`（一次性设置所有PP参数） |
 | 0x21 | 0x07 | 轮廓速度 | float | RW | `NrtSetPpTargetPosition()`（一次性设置所有PP参数） |
 | 0x21 | 0x08 | 轮廓加速度 | float | RW | `NrtSetPpTargetPosition()`（一次性设置所有PP参数） |
@@ -488,10 +486,8 @@ int main() {
     j2.NrtInit(bus, 2);
 
     // 3. 配置模式并使能
-    j1.RtSetWorkMode(CanEvoMode::kCsp);
-    j1.RtEnable();
-    j2.RtSetWorkMode(CanEvoMode::kCsp);
-    j2.RtEnable();
+    j1.RtEnable(CanEvoMode::kCsp);
+    j2.RtEnable(CanEvoMode::kCsp);
 
     // 4. 实时控制循环
     uint8_t cnt = 0;
@@ -532,7 +528,7 @@ int main() {
 
 2. **非实时接口（Nrt 前缀）**：所有以 `Nrt` 开头的接口为非实时接口，包括生命周期管理、SDO 配置等。SDO 接口为同步阻塞调用，会等待从站应答或超时（默认 100ms），不应在实时控制循环中调用。典型接口：`NrtInit()`、`NrtDestroy()`、`NrtGetProtocolVersion()`、`NrtSetMaxSpeed()` 等。
 
-3. **控制字管理**：`RtEnable()`、`RtDisable()`、`RtClearFault()`、`RtSetWorkMode()` 等函数修改内部 controlword 缓存（非阻塞），下次 PDO 帧发送时自动携带生效。用户无需手动管理 controlword。
+3. **控制字管理**：`RtEnable(mode)`、`RtDisable()`、`RtClearFault()` 等函数修改内部 controlword 缓存（非阻塞），下次 PDO 帧发送时自动携带生效。用户无需手动管理 controlword。
 
 4. **SYNC 广播**：每个控制周期调用一次 `bus.RtSendSync(counter)`，counter 0~255 循环递增。SYNC 使用独立 socket fd 发送，避免与 PDO 争抢锁。
 

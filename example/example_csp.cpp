@@ -79,25 +79,15 @@ int main() {
   }
   std::printf("[INFO] Joint initialized (node_id=%d)\n", kNodeId);
 
-  // 4. 设置工作模式为 CSP
-  ret = joint.RtSetWorkMode(CanEvoMode::kCsp);
-  if (ret != static_cast<int>(CanEvoError::kOk)) {
-    std::printf("[ERROR] Failed to set CSP mode: %d\n", ret);
-    joint.NrtDestroy();
-    bus.Close();
-    return 1;
-  }
-  std::printf("\n[INFO] Work mode set to CSP\n");
-
-  // 5. 使能关节
-  ret = joint.RtEnable();
+  // 4. 设置工作模式为 CSP 并使能关节
+  ret = joint.RtEnable(CanEvoMode::kCsp);
   if (ret != static_cast<int>(CanEvoError::kOk)) {
     std::printf("[ERROR] Failed to enable joint: %d\n", ret);
     joint.NrtDestroy();
     bus.Close();
     return 1;
   }
-  std::printf("[INFO] Joint enabled\n");
+  std::printf("[INFO] Joint enabled (CSP mode)\n");
 
   // 等待伺服进入运行状态
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
