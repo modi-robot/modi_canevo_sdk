@@ -662,13 +662,13 @@ void modi_joint_canevo::Impl::OnTxPdo0(const CanFrame& f) {
 
   JointStatus st;
   st.statusword = ReadU16LE(f.data + 0);
-  st.actual_pos_rad = ReadF32LE(f.data + 4) * kDegToRad;
-  st.actual_vel_rads = ReadF32LE(f.data + 8) * kRpmToRads;
-  st.actual_cur_a = ReadF32LE(f.data + 12);
-  st.actual_acc_radss = ReadF32LE(f.data + 16) * kRpmToRads;
-  st.bus_voltage_v = ReadU16LE(f.data + 20) * 0.01f;
-  st.pcb_temp_c = ReadI16LE(f.data + 22) * 0.1f;
-  st.motor_temp_c = ReadI16LE(f.data + 24) * 0.1f;
+  st.actual_pos_rad = ReadF32LE(f.data + 2) * kDegToRad;
+  st.actual_vel_rads = ReadF32LE(f.data + 6) * kRpmToRads;
+  st.actual_cur_a = ReadF32LE(f.data + 10);
+  st.actual_acc_radss = ReadF32LE(f.data + 14) * kRpmToRads;
+  st.bus_voltage_v = ReadU16LE(f.data + 18) * 0.01f;
+  st.pcb_temp_c = ReadI16LE(f.data + 20) * 0.1f;
+  st.motor_temp_c = ReadI16LE(f.data + 22) * 0.1f;
 
   {
     std::lock_guard<std::mutex> lk(status_mu_);
