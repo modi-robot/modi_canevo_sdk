@@ -646,18 +646,19 @@ void modi_joint_canevo::Impl::OnSdoResp(const CanFrame& f) {
  * TxPDO0 解析
  *
  * 默认映射 (CanEvo V1.2.3)：
+ * 默认映射 (CanEvo V1.2.3)：
  *   Byte  0~1  : statusword (uint16)
- *   Byte  4~7  : actual_pos (float, °)
- *   Byte  8~11 : actual_vel (float, rpm)
- *   Byte 12~15 : actual_cur (float, A)
- *   Byte 16~19 : actual_acc (float, rpm/s)
- *   Byte 20~21 : bus_voltage (uint16, *0.01 => V)
- *   Byte 22~23 : pcb_temp   (int16, *0.1 => ℃)
- *   Byte 24~25 : motor_temp (int16, *0.1 => ℃)
+ *   Byte  2~5  : actual_pos (float, °)
+ *   Byte  6~9 : actual_vel (float, rpm)
+ *   Byte 10~13 : actual_cur (float, A)
+ *   Byte 14~17 : actual_acc (float, rpm/s)
+ *   Byte 18~19 : bus_voltage (uint16, *0.01 => V)
+ *   Byte 20~21 : pcb_temp   (int16, *0.1 => ℃)
+ *   Byte 22~23 : motor_temp (int16, *0.1 => ℃)
  * ============================================================ */
 
 void modi_joint_canevo::Impl::OnTxPdo0(const CanFrame& f) {
-  if (f.len < 26) return;  // 至少需要 26 字节
+  if (f.len < 24) return;  // 至少需要 24 字节
 
   JointStatus st;
   st.statusword = ReadU16LE(f.data + 0);
