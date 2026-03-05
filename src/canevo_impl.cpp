@@ -608,13 +608,19 @@ void modi_joint_canevo::Impl::HandleFrame(const CanFrame& f) {
 }
 
 void modi_joint_canevo::Impl::OnSdoResp(const CanFrame& f) {
+  std::cout << "  【OnSdoResp】f.data: ";
+  for (int i = 0; i < f.len; i++) {
+    std::cout << std::hex << "0x" << (int)f.data[i] << " ";
+  }
+  std::cout << std::dec << std::endl;
+  
   std::lock_guard<std::mutex> lk(sdo_mu_);
 
-  if (sdo_pending_.done) return;  // 已处理或无等待
+  if (sdo_pending_.done) return;
 
   uint8_t cmd = f.data[0];
 
-  /* 应答故障（bit7=1） */
+  /* 应答故障 */
   if (cmd & kSdoCmdAbortBit) {
     sdo_pending_.abort_code = ReadU16LE(f.data + 4);
     sdo_pending_.result = static_cast<int>(CanEvoError::kSdoAbort);
@@ -627,21 +633,21 @@ void modi_joint_canevo::Impl::OnSdoResp(const CanFrame& f) {
   if (f.data[1] != sdo_pending_.index || f.data[2] != sdo_pending_.sub) return;
 
   if (sdo_pending_.cmd == kSdoCmdRd) {
-    /* 读响应：Byte3 = data_len, Byte4~7 = data */
-    uint8_t dlen = f.data[3];
-    if (dlen > 4) dlen = 4;
-    std::memcpy(sdo_pending_.payload, f.data + 4, dlen);
+    /* CanEvo 协议：数据从 Byte3 开始，长度 = f.len - 3 */
+    uint8_t dlen = f.len - 3;  // 总长度减去3字节头
+    if (dlen > 4) dlen = 4;    // 最多4字节
+    
+    std::memcpy(sdo_pending_.payload, f.data + 3, dlen);
     sdo_pending_.payload_len = dlen;
     sdo_pending_.result = static_cast<int>(CanEvoError::kOk);
+    
   } else if (sdo_pending_.cmd == kSdoCmdWr) {
-    /* 写响应：无附加数据 */
     sdo_pending_.result = static_cast<int>(CanEvoError::kOk);
   }
 
   sdo_pending_.done = true;
   sdo_cv_.notify_one();
 }
-
 /* ============================================================
  * TxPDO0 解析
  *
