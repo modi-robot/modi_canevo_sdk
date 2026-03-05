@@ -37,7 +37,7 @@ int main() {
     
     // ----- 3. 使能关节 -----
     std::cout << "\n>> 使能关节 ..." << std::endl;
-    if (joint.RtEnable() == 0)
+    if (joint.RtEnable(CanEvoMode::kCsp) == 0)
         std::cout << "√ 使能成功" << std::endl;
     else
         std::cout << "× 使能失败" << std::endl;
