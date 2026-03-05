@@ -24,6 +24,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <iostream>
 
 using namespace canevo;
 
@@ -608,8 +609,6 @@ void modi_joint_canevo::Impl::HandleFrame(const CanFrame& f) {
 }
 
 void modi_joint_canevo::Impl::OnSdoResp(const CanFrame& f) {
-  std::cout << std::dec << std::endl;
-  
   std::lock_guard<std::mutex> lk(sdo_mu_);
 
   if (sdo_pending_.done) return;
