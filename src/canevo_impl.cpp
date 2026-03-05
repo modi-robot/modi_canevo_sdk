@@ -608,10 +608,6 @@ void modi_joint_canevo::Impl::HandleFrame(const CanFrame& f) {
 }
 
 void modi_joint_canevo::Impl::OnSdoResp(const CanFrame& f) {
-  std::cout << "  【OnSdoResp】f.data: ";
-  for (int i = 0; i < f.len; i++) {
-    std::cout << std::hex << "0x" << (int)f.data[i] << " ";
-  }
   std::cout << std::dec << std::endl;
   
   std::lock_guard<std::mutex> lk(sdo_mu_);
