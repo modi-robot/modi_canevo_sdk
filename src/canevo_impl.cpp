@@ -395,15 +395,15 @@ int modi_joint_canevo::Impl::SendRxPdo3(float target_pos_deg,
                                         float profile_dec_rpms) {
   CanFrame f;
   f.id = kCobRxPdo3Base + node_id_;
-  f.len = 20;
+  f.len = 18;
   f.dlc = bus_->LenToDlc(f.len);
 
   WriteU16LE(f.data + 0, ConsumeControlword());
   /* data[2..3] 保留 */
-  WriteF32LE(f.data + 4, target_pos_deg);
-  WriteF32LE(f.data + 8, profile_vel_rpm);
-  WriteF32LE(f.data + 12, profile_acc_rpms);
-  WriteF32LE(f.data + 16, profile_dec_rpms);
+  WriteF32LE(f.data + 2, target_pos_deg);
+  WriteF32LE(f.data + 6, profile_vel_rpm);
+  WriteF32LE(f.data + 10, profile_acc_rpms);
+  WriteF32LE(f.data + 14, profile_dec_rpms);
 
   return bus_->EnqueueTx(f);
 }
@@ -502,13 +502,13 @@ int modi_joint_canevo::Impl::SdoWrite(uint8_t index, uint8_t sub,
 
   CanFrame f;
   f.id = kCobSdoReqBase + node_id_;
-  f.len = 8;
+  f.len = 3 + len;
   f.dlc = bus_->LenToDlc(f.len);
   f.data[0] = kSdoCmdWr;
   f.data[1] = index;
   f.data[2] = sub;
-  f.data[3] = len;
-  std::memcpy(f.data + 4, data, len);
+  //f.data[3] = len;
+  std::memcpy(f.data + 3, data, len);
 
   sdo_pending_.cmd = kSdoCmdWr;
   sdo_pending_.index = index;
