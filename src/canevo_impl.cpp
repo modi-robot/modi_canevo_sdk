@@ -359,7 +359,7 @@ int modi_joint_canevo::Impl::SendRxPdo0(float target_pos_deg) {
   f.dlc = bus_->LenToDlc(f.len);
 
   WriteU16LE(f.data + 0, ConsumeControlword());
-  WriteF32LE(f.data + 4, target_pos_deg);
+  WriteF32LE(f.data + 2, target_pos_deg);
   /* data[2..3] 保留 */
 
   return bus_->EnqueueTx(f);
@@ -368,7 +368,7 @@ int modi_joint_canevo::Impl::SendRxPdo0(float target_pos_deg) {
 int modi_joint_canevo::Impl::SendRxPdo1(float target_vel_rpm) {
   CanFrame f;
   f.id = kCobRxPdo1Base + node_id_;
-  f.len = 8;
+  f.len = 6;
   f.dlc = bus_->LenToDlc(f.len);
 
   WriteU16LE(f.data + 0, ConsumeControlword());
