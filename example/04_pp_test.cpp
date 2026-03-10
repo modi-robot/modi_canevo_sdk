@@ -35,7 +35,7 @@ int main() {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     
     // 使能PP模式
-    joint.RtEnable(CanEvoMode::kPp);
+    joint.NrtEnable(CanEvoMode::kPp);
     joint.RtSetPpTargetPosition(0.0f, 1.0f, 1.0f, 1.0f);
     bus.RtSendSync(sync++);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -51,9 +51,7 @@ int main() {
     std::this_thread::sleep_for(std::chrono::seconds(9));
     
     // 失能关节
-    joint.RtDisable();
-    bus.RtSendSync(sync++);
-    joint.RtSetPpTargetPosition(0.0f, 1.0f, 1.0f, 1.0f);
+    joint.NrtDisable();
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     
     joint.NrtDestroy();

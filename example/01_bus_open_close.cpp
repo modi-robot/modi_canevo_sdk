@@ -37,10 +37,17 @@ int main() {
     
     // ----- 3. 使能关节 -----
     std::cout << "\n>> 使能关节 ..." << std::endl;
-    if (joint.RtEnable(CanEvoMode::kCsp) == 0)
+    if (joint.NrtEnable(CanEvoMode::kCsp) == 0)
         std::cout << "√ 使能成功" << std::endl;
     else
         std::cout << "× 使能失败" << std::endl;
+    
+    // 发送几帧确保使能生效
+    for (int i = 0; i < 5; i++) {
+        bus.RtSendSync(i);
+        joint.RtSetCspTargetPosition(0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
     
     // ----- 4. 读取状态 -----
     std::cout << "\n>> 读取关节状态 ..." << std::endl;
@@ -85,7 +92,7 @@ int main() {
     
     // ----- 5. 清理 -----
     std::cout << "\n>> 清理资源 ..." << std::endl;
-    joint.RtDisable();
+    joint.NrtDisable();
     joint.NrtDestroy();
     bus.Close();
     PrintStatus(bus, "关闭后");

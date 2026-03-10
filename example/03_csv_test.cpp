@@ -26,9 +26,7 @@ int main() {
     uint8_t sync = 0;
     
     // 使能CSV模式
-    joint.RtEnable(CanEvoMode::kCsv);
-    joint.RtSetCsvTargetVelocity(0.0f);
-    bus.RtSendSync(sync++);
+    joint.NrtEnable(CanEvoMode::kCsv);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     
     // 10 rpm 正转3秒
@@ -68,8 +66,7 @@ int main() {
     }
     
     // 失能关节
-    joint.RtDisable();
-    bus.RtSendSync(sync++);
+    joint.NrtDisable();
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     
     joint.NrtDestroy();
