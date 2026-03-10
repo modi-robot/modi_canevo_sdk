@@ -80,7 +80,7 @@ int main() {
   std::printf("[INFO] Joint initialized (node_id=%d)\n", kNodeId);
 
   // 4. 设置工作模式为 CSP 并使能关节
-  ret = joint.RtEnable(CanEvoMode::kCsp);
+  ret = joint.NrtEnable(CanEvoMode::kCsp);
   if (ret != static_cast<int>(CanEvoError::kOk)) {
     std::printf("[ERROR] Failed to enable joint: %d\n", ret);
     joint.NrtDestroy();
@@ -157,7 +157,7 @@ int main() {
   std::printf("\n[INFO] Control loop finished (%u cycles)\n", cycle_count);
 
   // 7. 失能关节
-  joint.RtDisable();
+  joint.NrtDisable();
   std::printf("[INFO] Joint disabled\n");
 
   // 8. 清理资源
