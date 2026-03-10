@@ -16,6 +16,8 @@
 
 #include "canevo_impl.h"
 
+constexpr int PERIOD_MS = 1;  // 40Hz // init时必要的发布90个同步帧，1个1ms
+
 using namespace canevo;
 
 /* ---- 单位转换常量 ---- */
@@ -61,7 +63,19 @@ int modi_joint_canevo::NrtInit(modi_bus_canevo& bus, const uint8_t node_id) {
   if (!bus.IsOpen()) return static_cast<int>(CanEvoError::kBusNotOpen);
   if (node_id == 0 || node_id > 62)
     return static_cast<int>(CanEvoError::kInvalidParam);
-  if (impl_->isInitialized()) NrtDestroy();  // 已初始化则先释放
+  if (impl_->isInitialized()) NrtDestroy();  // 已初始化则先释放 
+  
+  
+  // 发布90个同步帧,后续可能需要删除掉
+  uint8_t sync = 0;
+  for (int i = 0; i < 90; i++) {
+    bus.RtSendSync(sync++);
+    //joint.RtSetCspTargetPosition(current_pos_rad);
+    std::this_thread::sleep_for(std::chrono::milliseconds(PERIOD_MS));
+}
+
+
+
 
   return impl_->Init(bus.impl_.get(), node_id);
 }
