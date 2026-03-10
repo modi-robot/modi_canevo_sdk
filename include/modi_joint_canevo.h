@@ -23,9 +23,9 @@
  *   j1.NrtInit(bus, 1);
  *   j2.NrtInit(bus, 2);
  *
- *   // 配置模式并使能
- *   j1.RtEnable(CanEvoMode::kCsp);
- *   j2.RtEnable(CanEvoMode::kCsp);
+ *   // 配置模式并使能（使用 NrtEnable）
+ *   j1.NrtEnable(CanEvoMode::kCsp);
+ *   j2.NrtEnable(CanEvoMode::kCsp);
  *
  *   // 实时控制循环
  *   uint8_t cnt = 0;
@@ -40,8 +40,9 @@
  *       j2.RtSetCspTargetPosition(pos2_rad);
  *   }
  *
- *   j1.RtDisable();
- *   j2.RtDisable();
+ *   // 失能（使用 NrtDisable）
+ *   j1.NrtDisable();
+ *   j2.NrtDisable();
  *
  *   j1.NrtDestroy();
  *   j2.NrtDestroy();
@@ -303,7 +304,7 @@ class modi_joint_canevo {
    *
    * 所有 set*Target* 函数仅将帧入队（SPSC 无锁队列），
    * 由内部 Tx 线程异步执行 write()，不阻塞调用者。
-   * controlword 由 SDK 内部缓存自动管理（通过 RtEnable/RtDisable
+   * controlword 由 SDK 内部缓存自动管理（通过 NrtEnable/NrtDisable
    * 等修改）。
    *
    * 典型调用顺序：
@@ -367,21 +368,7 @@ class modi_joint_canevo {
    * controlword 控制（非阻塞，修改内部缓存，下次 PDO 帧生效）
    * ============================================================ */
 
-  /**
-   * @brief 伺服使能并设置工作模式（设置控制字 bit1 = 1 和 bit12~bit15）
-   * [实时接口]
-   * @param mode 目标工作模式
-   * @note 非阻塞，修改内部 controlword 缓存，下次 PDO 发送时生效
-   * @return CanEvoError::kOk 成功，NotInitialized 未初始化
-   */
-  int RtEnable(const CanEvoMode mode);
-
-  /**
-   * @brief 伺服失能（先切换到 CSP 模式，再设置控制字 bit1 = 0） [实时接口]
-   * @note 非阻塞，修改内部 controlword 缓存，下次 PDO 发送时生效
-   * @return CanEvoError::kOk 成功，NotInitialized 未初始化
-   */
-  int RtDisable();
+  /* RtEnable 和 RtDisable 已被移除，请使用 NrtEnable/NrtDisable */
 
   /**
    * @brief 清除故障（触发控制字 bit0 单周期脉冲） [实时接口]

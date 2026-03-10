@@ -123,22 +123,7 @@ bool modi_joint_canevo::RtGetEmcy(CanEvoFault& out_fault) {
  * controlword 控制（非阻塞，修改内部缓存）
  * ============================================================ */
 
-int modi_joint_canevo::RtEnable(const CanEvoMode mode) {
-  if (!impl_->isInitialized())
-    return static_cast<int>(CanEvoError::kNotInitialized);
-  impl_->SetMode(mode);
-  impl_->SetEnable(true);
-  return static_cast<int>(CanEvoError::kOk);
-}
-
-int modi_joint_canevo::RtDisable() {
-  if (!impl_->isInitialized())
-    return static_cast<int>(CanEvoError::kNotInitialized);
-  // 先切换到 CSP 模式，再失能
-  impl_->SetMode(CanEvoMode::kCsp);
-  impl_->SetEnable(false);
-  return static_cast<int>(CanEvoError::kOk);
-}
+/* RtEnable 和 RtDisable 已被移除，请使用 NrtEnable/NrtDisable */
 
 int modi_joint_canevo::RtClearFault() {
   if (!impl_->isInitialized())
@@ -177,7 +162,15 @@ int modi_joint_canevo::NrtEnable(const CanEvoMode mode) {
                              (static_cast<uint16_t>(mode) << 12));
   // bit1 = 1 (使能)
   cw = static_cast<uint16_t>((cw & ~0x0002) | 0x0002);
-  return impl_->sdoWriteU16(0x21, 0x00, cw);
+  
+  ret = impl_->sdoWriteU16(0x21, 0x00, cw);  // 先写硬件
+  if (ret != 0) return ret;
+  
+  // ★★★ 调用已有的方法更新缓存 ★★★
+  impl_->SetMode(mode);      // 设置模式
+  impl_->SetEnable(true);    // 设置使能
+  
+  return static_cast<int>(CanEvoError::kOk);
 }
 
 int modi_joint_canevo::NrtDisable() {
@@ -190,7 +183,15 @@ int modi_joint_canevo::NrtDisable() {
   cw = static_cast<uint16_t>((cw & ~0xF000) |
                              (static_cast<uint16_t>(CanEvoMode::kCsp) << 12));
   cw = static_cast<uint16_t>(cw & ~0x0002);  // bit1 = 0
-  return impl_->sdoWriteU16(0x21, 0x00, cw);
+  
+  ret = impl_->sdoWriteU16(0x21, 0x00, cw);  // 先写硬件
+  if (ret != 0) return ret;
+  
+  // ★★★ 调用已有的方法更新缓存 ★★★
+  impl_->SetMode(CanEvoMode::kCsp);  // 设置模式为 CSP
+  impl_->SetEnable(false);            // 失能
+  
+  return static_cast<int>(CanEvoError::kOk);
 }
 
 int modi_joint_canevo::NrtClearFault() {
