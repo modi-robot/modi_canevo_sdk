@@ -1,5 +1,5 @@
 /**
- * @file 77_csp_enable_only_long.cpp
+ * @file 05_csp_test.cpp
  * @brief CSP测试demo
  * 
  * 运动参数：

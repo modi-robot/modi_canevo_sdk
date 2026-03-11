@@ -1,6 +1,6 @@
 /**
- * @file 02_test_pcb_temperature.cpp
- * @brief 测试PCB温度读取
+ * @file 02_test_sdo.cpp
+ * @brief 测试SDO读取参数
  */
 
 #define _USE_MATH_DEFINES

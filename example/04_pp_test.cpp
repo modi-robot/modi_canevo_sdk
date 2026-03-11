@@ -1,5 +1,5 @@
 /**
- * @file 06_pp_360_test.cpp
+ * @file 04_pp_test.cpp
  * @brief PP模式测试 - 目标360°，轮廓参数全10
  * 
  * 参数：
