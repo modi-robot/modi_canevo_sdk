@@ -137,7 +137,6 @@ bool modi_joint_canevo::RtGetEmcy(CanEvoFault& out_fault) {
  * controlword 控制（非阻塞，修改内部缓存）
  * ============================================================ */
 
-/* RtEnable 和 RtDisable 已被移除，请使用 NrtEnable/NrtDisable */
 
 int modi_joint_canevo::RtClearFault() {
   if (!impl_->isInitialized())
