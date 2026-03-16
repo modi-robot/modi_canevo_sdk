@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <iostream>
 #include <thread>
 
 #include "canevo_impl.h"
@@ -35,8 +36,9 @@ modi_bus_canevo::modi_bus_canevo() : impl_(std::make_unique<Impl>()) {}
 modi_bus_canevo::~modi_bus_canevo() = default;
 
 /* ---- 接口 ---- */
-int modi_bus_canevo::Open(const std::string& can_ifname) {
-  return impl_->Open(can_ifname);
+int modi_bus_canevo::Open(const std::string& can_ifname,
+                          const TaskConfig& task_config) {
+  return impl_->Open(can_ifname, task_config);
 }
 void modi_bus_canevo::Close() { impl_->Close(); }
 bool modi_bus_canevo::IsOpen() const { return impl_->IsOpen(); }
@@ -49,6 +51,12 @@ void modi_bus_canevo::SetSdoTimeoutMs(const int ms) {
 void modi_bus_canevo::SetPdoTimeoutMs(const int ms) {
   impl_->SetDefaultPdoTimeoutMs(ms);
 }
+
+int modi_bus_canevo::StartControlLoop(ControlLoopCallback callback) {
+  return impl_->StartControlLoop(callback);
+}
+
+void modi_bus_canevo::Join() { impl_->Join(); }
 
 /* ============================================================
  *            modi_joint_canevo
@@ -72,12 +80,24 @@ int modi_joint_canevo::NrtInit(modi_bus_canevo& bus, const uint8_t node_id) {
     bus.RtSendSync(sync++);
     //joint.RtSetCspTargetPosition(current_pos_rad);
     std::this_thread::sleep_for(std::chrono::milliseconds(PERIOD_MS));
-}
+  }
 
+  int ret = impl_->Init(bus.impl_.get(), node_id);
+  if (ret == static_cast<int>(CanEvoError::kOk)) {
+    // 注册到总线
+    bus.impl_->RegisterJoint(node_id, impl_.get());
 
-
-
-  return impl_->Init(bus.impl_.get(), node_id);
+    // 自动设置同步周期（与控制循环周期一致）
+    uint16_t sync_period_us =
+        static_cast<uint16_t>(bus.impl_->GetTaskConfig().period_us);
+    int sync_ret = impl_->SetSyncPeriod(sync_period_us);
+    if (sync_ret != static_cast<int>(CanEvoError::kOk)) {
+      std::cerr << "警告: 无法设置关节同步周期 (node_id=" << (int)node_id
+                << ", errno=" << sync_ret << ")" << std::endl;
+      return sync_ret;
+    }
+  }
+  return ret;
 }
 
 void modi_joint_canevo::NrtDestroy() { impl_->Shutdown(); }
@@ -326,9 +346,6 @@ uint16_t modi_joint_canevo::NrtGetSyncPeriod() {
   uint16_t v = 0;
   impl_->sdoReadU16(0x00, 0x0F, v);
   return v;
-}
-int modi_joint_canevo::NrtSetSyncPeriod(const uint16_t v) {
-  return impl_->sdoWriteU16(0x00, 0x0F, v);
 }
 
 uint16_t modi_joint_canevo::NrtGetCommTimeout() {
@@ -592,4 +609,26 @@ bool modi_joint_canevo::RtHasWarning() {
   if (!impl_->isInitialized()) return false;
   uint16_t sw = impl_->GetStatusword();
   return (sw & kSwWarnBit) != 0;
+}
+
+CanEvoServoState modi_joint_canevo::NrtGetServoState() {
+  uint16_t sw = 0;
+  int ret = impl_->sdoReadU16(0x21, 0x01, sw);
+  if (ret != 0) return CanEvoServoState::kInit;
+  return static_cast<CanEvoServoState>(sw & kSwStateMask);
+}
+
+CanEvoMode modi_joint_canevo::NrtGetCurrentMode() {
+  uint16_t sw = 0;
+  int ret = impl_->sdoReadU16(0x21, 0x01, sw);
+  if (ret != 0) return CanEvoMode::kCsp;
+  return static_cast<CanEvoMode>((sw & kSwModeMask) >> kSwModeShift);
+}
+
+bool modi_joint_canevo::NrtIsRunning() {
+  uint16_t sw = 0;
+  int ret = impl_->sdoReadU16(0x21, 0x01, sw);
+  if (ret != 0) return false;
+  return (sw & kSwStateMask) ==
+         static_cast<uint16_t>(CanEvoServoState::kRunning);
 }

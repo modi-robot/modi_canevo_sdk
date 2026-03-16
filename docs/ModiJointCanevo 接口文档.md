@@ -10,24 +10,27 @@
   - [2.4 CanEvoFault — 故障码枚举](#24-canevofault--故障码枚举)
   - [2.5 CanEvoWarn — 警告码枚举](#25-canevowarn--警告码枚举)
   - [2.6 JointStatus — 关节状态结构体](#26-jointstatus--关节状态结构体)
+  - [2.7 TaskConfig — 任务配置结构体](#27-taskconfig--任务配置结构体)
 - [3. 常量定义](#3-常量定义)
 - [4. modi_bus_canevo 接口列表](#4-modi_bus_canevo-接口列表)
   - [4.1 构造与生命周期](#41-构造与生命周期)
   - [4.2 总线控制](#42-总线控制)
-  - [4.3 超时配置](#43-超时配置)
+  - [4.3 实时控制循环](#43-实时控制循环)
+  - [4.4 超时配置](#44-超时配置)
 - [5. modi_joint_canevo 接口列表](#5-modi_joint_canevo-接口列表)
   - [5.1 构造与生命周期](#51-构造与生命周期)
   - [5.2 PDO 实时控制（非阻塞）](#52-pdo-实时控制非阻塞)
   - [5.3 状态读取（非阻塞）](#53-状态读取非阻塞)
   - [5.4 控制字控制（非阻塞）](#54-控制字控制非阻塞)
-  - [5.5 状态查询辅助（非阻塞）](#55-状态查询辅助非阻塞)
-  - [5.6 SDO 设备信息（阻塞，Index 0x00）](#56-sdo-设备信息阻塞index-0x00)
-  - [5.7 SDO 关节参数（阻塞，Index 0x01）](#57-sdo-关节参数阻塞index-0x01)
-  - [5.8 SDO 控制器参数（阻塞，Index 0x07）](#58-sdo-控制器参数阻塞index-0x07)
-  - [5.9 SDO 编码器参数（阻塞，Index 0x08）](#59-sdo-编码器参数阻塞index-0x08)
-  - [5.10 SDO PP 模式轮廓参数（阻塞，Index 0x21）](#510-sdo-pp-模式轮廓参数阻塞index-0x21)
-  - [5.11 SDO 关节实际状态（阻塞，Index 0x20，只读）](#511-sdo-实际量阻塞index-0x20只读)
-  - [5.12 SDO 控制字操作（阻塞）](#512-sdo-控制字操作阻塞)
+  - [5.5 状态查询辅助（非阻塞，从PDO缓存读取）](#55-状态查询辅助非阻塞从pdo缓存读取)
+  - [5.6 状态查询辅助（阻塞，通过SDO读取）](#56-状态查询辅助阻塞通过sdo读取)
+  - [5.7 SDO 设备信息（阻塞，Index 0x00）](#57-sdo-设备信息阻塞index-0x00)
+  - [5.8 SDO 关节参数（阻塞，Index 0x01）](#58-sdo-关节参数阻塞index-0x01)
+  - [5.9 SDO 控制器参数（阻塞，Index 0x07）](#59-sdo-控制器参数阻塞index-0x07)
+  - [5.10 SDO 编码器参数（阻塞，Index 0x08）](#510-sdo-编码器参数阻塞index-0x08)
+  - [5.11 SDO PP 模式轮廓参数（阻塞，Index 0x21）](#511-sdo-pp-模式轮廓参数阻塞index-0x21)
+  - [5.12 SDO 关节实际状态（阻塞，Index 0x20，只读）](#512-sdo-实际量阻塞index-0x20只读)
+  - [5.13 SDO 控制字操作（阻塞）](#513-sdo-控制字操作阻塞)
 - [6. PDO 映射方案](#6-pdo-映射方案)
 - [7. 对象字典索引参考](#7-对象字典索引参考)
 - [8. 典型用法](#8-典型用法)
@@ -175,6 +178,22 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 | `pcb_temp_c` | `float` | ℃ | PCB温度（raw×0.1） |
 | `motor_temp_c` | `float` | ℃ | 电机温度（raw×0.1） |
 
+### 2.7 TaskConfig — 任务配置结构体
+
+用于配置实时控制循环线程和Rx线程的参数。
+
+| 字段名 | 类型 | 单位 | 默认值 | 说明 |
+|--------|------|------|--------|------|
+| `period_us` | `int` | μs | 5000 | 控制周期（微秒）|
+| `priority` | `int` | — | 90 | 实时优先级（0~99，数值越大优先级越高）|
+| `cpu_affinity` | `int` | — | 2 | CPU亲和性（绑定到指定CPU核心编号）|
+
+> **说明**：
+> - 控制周期会在 `Open()` 时自动通过 SDO 同步到关节（0x00/0x0F）
+> - 实时优先级使用 `SCHED_FIFO` 调度策略，需要 root 权限或 `CAP_SYS_NICE` 能力
+> - CPU 亲和性对实时性能至关重要，建议绑定到隔离的 CPU 核心
+> - `Open()` 时会自动调用 `mlockall()` 锁定内存，防止页面交换
+
 ---
 
 ## 3. 常量定义
@@ -203,17 +222,37 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
-| 3 | `Open(can_ifname)` | `can_ifname`: SocketCAN 接口名（const std::string&），如 "can0" | `int` — CanEvoError::kOk 成功 | 打开 SocketCAN 总线，创建收/发线程 |
-| 4 | `Close()` | 无 | `void` | 关闭总线，停止线程，释放所有资源 |
+| 3 | `Open(can_ifname, task_config)` | `can_ifname`: SocketCAN 接口名（const std::string&），如 "can0"<br>`task_config`: 任务配置（const TaskConfig&），控制周期、优先级、CPU亲和性，默认值：5000us/优先级90/CPU2 | `int` — CanEvoError::kOk 成功 | 打开 SocketCAN 总线，创建 Rx 线程和配置控制循环参数。会自动调用 `mlockall()` 锁定内存，并将配置应用于所有子线程 |
+| 4 | `Close()` | 无 | `void` | 关闭总线，自动停止控制循环线程和 Rx 线程，释放所有资源 |
 | 5 | `IsOpen()` | 无 | `bool` — true: 已打开 | 查询总线是否已打开 |
-| 6 | `RtSendSync(counter)` | `counter`: 同步计数器（const uint8_t，0~255 循环递增） | `int` — CanEvoError::kOk 成功 | 发送 SYNC 广播帧（cob_id=0x03F），每个控制周期调用一次。使用独立 socket fd 发送，避免与 PDO 争抢锁 [实时接口] |
 
-### 4.3 超时配置
+### 4.3 实时控制循环
 
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
-| 7 | `SetSdoTimeoutMs(ms)` | `ms`: 超时毫秒数（const int） | `void` | 设置 SDO 默认超时（作为后续创建 joint 的默认值） |
-| 8 | `SetPdoTimeoutMs(ms)` | `ms`: 超时毫秒数（const int） | `void` | 设置 PDO 默认超时 |
+| 6 | `StartControlLoop(callback)` | `callback`: 控制循环回调函数（ControlLoopCallback），每个控制周期执行 | `int` — CanEvoError::kOk 成功 | 启动实时控制循环线程。线程会以固定周期（在 `Open()` 中配置）执行：①发送 SYNC 广播（0~255 循环）②调用用户回调 ③绝对时间睡眠（避免累积误差）。线程具有实时优先级（`SCHED_FIFO`）和 CPU 亲和性 [实时接口] |
+| 7 | `Join()` | 无 | `void` | 阻塞当前线程，等待控制循环线程结束（通过 `Close()` 触发）。如果控制循环未启动则立即返回 |
+
+> **典型用法**：
+> ```cpp
+> TaskConfig config;
+> config.period_us = 5000;  // 5ms 周期
+> config.priority = 99;     // 最高优先级
+> config.cpu_affinity = 2;  // 绑定到 CPU 2
+> 
+> bus.Open("can0", config);
+> bus.StartControlLoop([&joint]() {
+>     joint.RtSetCspTargetPosition(target_pos);
+> });
+> bus.Join();  // 阻塞主线程
+> ```
+
+### 4.4 超时配置
+
+| 序号 | 接口名字 | 参数 | 返回值 | 说明 |
+|------|---------|------|--------|------|
+| 8 | `SetSdoTimeoutMs(ms)` | `ms`: 超时毫秒数（const int） | `void` | 设置 SDO 默认超时（作为后续创建 joint 的默认值） |
+| 9 | `SetPdoTimeoutMs(ms)` | `ms`: 超时毫秒数（const int） | `void` | 设置 PDO 默认超时 |
 
 ---
 
@@ -227,7 +266,7 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 |------|---------|------|--------|------|
 | 1 | `modi_joint_canevo()` | 无 | — | 构造函数 |
 | 2 | `~modi_joint_canevo()` | 无 | — | 析构函数（自动调用 NrtDestroy） |
-| 3 | `NrtInit(bus, node_id)` | `bus`: 已打开的总线实例引用（modi_bus_canevo&）<br>`node_id`: 节点 ID（const uint8_t，1~62） | `int` — CanEvoError::kOk 成功；kBusNotOpen 总线未打开；kInvalidParam 参数非法 | 初始化关节，绑定到总线和节点 ID。若已初始化则先自动释放 [非实时接口] |
+| 3 | `NrtInit(bus, node_id)` | `bus`: 已打开的总线实例引用（modi_bus_canevo&）<br>`node_id`: 节点 ID（const uint8_t，1~62） | `int` — CanEvoError::kOk 成功；kBusNotOpen 总线未打开；kInvalidParam 参数非法 | 初始化关节，绑定到总线和节点 ID。会自动从 `TaskConfig` 读取控制周期并通过 SDO（0x00/0x0F）同步到关节。若已初始化则先自动释放 [非实时接口] |
 | 4 | `NrtDestroy()` | 无 | `void` | 释放关节资源，从总线注销 [非实时接口] |
 | 5 | `NrtNodeId()` | 无 | `uint8_t` — 当前绑定的 node_id，未初始化返回 0 | 获取当前绑定的节点 ID [非实时接口] |
 
@@ -235,9 +274,9 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 
 ### 5.2 PDO 实时控制（非阻塞）
 
-所有 `Set*Target*` 函数仅将帧入队（SPSC 无锁队列），由内部 Tx 线程异步执行 write()，不阻塞调用者。controlword 由 SDK 内部缓存自动携带。
+所有 `Set*Target*` 函数直接通过 `::write()` 系统调用发送 CAN-FD 帧，controlword 由 SDK 内部缓存自动携带。
 
-典型调用顺序：① `bus.RtSendSync(counter)` → ② `joint.RtGetJointStatus(st)` → ③ `joint.RtSetCspTargetPosition(pos_rad)`
+典型调用顺序（在控制循环回调中）：① `joint.RtGetJointStatus(st)` → ② `joint.RtSetCspTargetPosition(pos_rad)`
 
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
@@ -265,9 +304,9 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 | 16 | `RtEstop()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | 触发急停（设置控制字 bit2 = 1） [实时接口] |
 | 17 | `RtClearEstop()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | 清除急停（设置控制字 bit2 = 0） [实时接口] |
 
-### 5.5 状态查询辅助（非阻塞）
+### 5.5 状态查询辅助（非阻塞，从PDO缓存读取）
 
-内部从 TxPDO0 缓存读取状态字并解析，无需传入状态字参数。
+内部从 TxPDO0 缓存读取状态字并解析，无需传入状态字参数。适用于实时控制循环。
 
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
@@ -276,111 +315,120 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 | 20 | `RtIsRunning()` | 无 | `bool` — true: 伺服使能运行中 | 检查是否处于运行状态（状态 = kRunning） [实时接口] |
 | 21 | `RtHasWarning()` | 无 | `bool` — true: 存在警告 | 检查是否有警告（状态字 bit4） [实时接口] |
 
-### 5.6 SDO 设备信息（阻塞，Index 0x00）
+### 5.6 状态查询辅助（阻塞，通过SDO读取）
+
+通过 SDO 读取状态字（0x21/0x01）并解析，阻塞调用。适用于初始化阶段或非实时诊断场景。
+
+| 序号 | 接口名字 | 参数 | 返回值 | 说明 |
+|------|---------|------|--------|------|
+| 22 | `NrtGetServoState()` | 无 | `CanEvoServoState` — 伺服状态机枚举值 | 通过 SDO 获取伺服状态机状态（读取 0x21/0x01，解析 bit0~bit3） [非实时接口] |
+| 23 | `NrtGetCurrentMode()` | 无 | `CanEvoMode` — 当前工作模式枚举值 | 通过 SDO 获取当前工作模式（读取 0x21/0x01，解析 bit12~bit15） [非实时接口] |
+| 24 | `NrtIsRunning()` | 无 | `bool` — true: 伺服使能运行中 | 通过 SDO 检查是否处于运行状态（读取 0x21/0x01，判断状态 = kRunning） [非实时接口] |
+
+### 5.7 SDO 设备信息（阻塞，Index 0x00）
 
 所有 get 接口直接返回结果值，SDO 通信失败时返回 0 / 默认值。
 
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
-| 22 | `NrtGetProtocolVersion()` | 无 | `uint16_t` — 协议版本 | 0x00/0x01 读取协议版本（R） [非实时接口] |
-| 23 | `NrtGetModuleType()` | 无 | `uint32_t` — 关节代号 | 0x00/0x02 读取关节代号（R） [非实时接口] |
-| 24 | `NrtGetVendorCode()` | 无 | `uint32_t` — 厂商代号 | 0x00/0x03 读取厂商代号（R） [非实时接口] |
-| 25 | `NrtGetGlobalId(id)` | `id`: [out] 输出数组（uint32_t[4]） | `int` — CanEvoError::kOk 成功 | 0x00/0x04~0x07 读取关节全球 ID（4×uint32，R） [非实时接口] |
-| 26 | `NrtGetFaultCode()` | 无 | `CanEvoFault` — 故障码枚举值，kNone 表示无故障 | 0x00/0x08 读取故障代码（SDO 阻塞轮询，R） [非实时接口] |
-| 27 | `NrtGetWarnCode()` | 无 | `CanEvoWarn` — 警告码枚举值，kNone 表示无警告 | 0x00/0x09 读取警告代码（SDO 阻塞轮询，R） [非实时接口] |
-| 28 | `NrtGetDiagInfo()` | 无 | `uint16_t` — 诊断信息 | 0x00/0x0A 读取诊断信息（R） [非实时接口] |
-| 29 | `NrtGetCanBaud()` | 无 | `uint16_t` — 波特率编码 | 0x00/0x0B 读取 CAN 波特率编码（RW） [非实时接口] |
-| 30 | `NrtSetCanBaud(baud)` | `baud`: 波特率编码（const uint16_t） | `int` — CanEvoError::kOk 成功 | 0x00/0x0B 写入 CAN 波特率编码 — 保存参数 + 重启后生效 [非实时接口] |
-| 31 | `NrtGetCanId()` | 无 | `uint16_t` — CAN ID（1~62） | 0x00/0x0C 读取 CAN ID（RW） [非实时接口] |
-| 32 | `NrtSetCanId(can_id)` | `can_id`: CAN ID（const uint16_t，1~62） | `int` — CanEvoError::kOk 成功 | 0x00/0x0C 写入 CAN ID — 保存参数 + 重启后生效 [非实时接口] |
-| 33 | `NrtGetFwVersion()` | 无 | `uint16_t` — 固件版本 | 0x00/0x0D 读取固件版本（R） [非实时接口] |
-| 34 | `NrtGetHwVersion()` | 无 | `uint16_t` — 硬件版本 | 0x00/0x0E 读取硬件版本（R） [非实时接口] |
-| 35 | `NrtGetSyncPeriod()` | 无 | `uint16_t` — 同步周期，单位：us | 0x00/0x0F 读取同步周期（RW） [非实时接口] |
-| 36 | `NrtSetSyncPeriod(us)` | `us`: 同步周期（const uint16_t），单位：us | `int` — CanEvoError::kOk 成功 | 0x00/0x0F 写入同步周期 [非实时接口] |
-| 37 | `NrtGetCommTimeout()` | 无 | `uint16_t` — 通信超时时间，单位：ms | 0x00/0x10 读取通信超时时间（RW） [非实时接口] |
-| 38 | `NrtSetCommTimeout(ms)` | `ms`: 超时时间（const uint16_t），单位：ms | `int` — CanEvoError::kOk 成功 | 0x00/0x10 写入通信超时时间 [非实时接口] |
+| 25 | `NrtGetProtocolVersion()` | 无 | `uint16_t` — 协议版本 | 0x00/0x01 读取协议版本（R） [非实时接口] |
+| 26 | `NrtGetModuleType()` | 无 | `uint32_t` — 关节代号 | 0x00/0x02 读取关节代号（R） [非实时接口] |
+| 27 | `NrtGetVendorCode()` | 无 | `uint32_t` — 厂商代号 | 0x00/0x03 读取厂商代号（R） [非实时接口] |
+| 28 | `NrtGetGlobalId(id)` | `id`: [out] 输出数组（uint32_t[4]） | `int` — CanEvoError::kOk 成功 | 0x00/0x04~0x07 读取关节全球 ID（4×uint32，R） [非实时接口] |
+| 29 | `NrtGetFaultCode()` | 无 | `CanEvoFault` — 故障码枚举值，kNone 表示无故障 | 0x00/0x08 读取故障代码（SDO 阻塞轮询，R） [非实时接口] |
+| 30 | `NrtGetWarnCode()` | 无 | `CanEvoWarn` — 警告码枚举值，kNone 表示无警告 | 0x00/0x09 读取警告代码（SDO 阻塞轮询，R） [非实时接口] |
+| 31 | `NrtGetDiagInfo()` | 无 | `uint16_t` — 诊断信息 | 0x00/0x0A 读取诊断信息（R） [非实时接口] |
+| 32 | `NrtGetCanBaud()` | 无 | `uint16_t` — 波特率编码 | 0x00/0x0B 读取 CAN 波特率编码（RW） [非实时接口] |
+| 33 | `NrtSetCanBaud(baud)` | `baud`: 波特率编码（const uint16_t） | `int` — CanEvoError::kOk 成功 | 0x00/0x0B 写入 CAN 波特率编码 — 保存参数 + 重启后生效 [非实时接口] |
+| 34 | `NrtGetCanId()` | 无 | `uint16_t` — CAN ID（1~62） | 0x00/0x0C 读取 CAN ID（RW） [非实时接口] |
+| 35 | `NrtSetCanId(can_id)` | `can_id`: CAN ID（const uint16_t，1~62） | `int` — CanEvoError::kOk 成功 | 0x00/0x0C 写入 CAN ID — 保存参数 + 重启后生效 [非实时接口] |
+| 36 | `NrtGetFwVersion()` | 无 | `uint16_t` — 固件版本 | 0x00/0x0D 读取固件版本（R） [非实时接口] |
+| 37 | `NrtGetHwVersion()` | 无 | `uint16_t` — 硬件版本 | 0x00/0x0E 读取硬件版本（R） [非实时接口] |
+| 38 | `NrtGetSyncPeriod()` | 无 | `uint16_t` — 同步周期，单位：us | 0x00/0x0F 读取同步周期（RW） [非实时接口] |
+| 39 | `NrtGetCommTimeout()` | 无 | `uint16_t` — 通信超时时间，单位：ms | 0x00/0x10 读取通信超时时间（RW） [非实时接口] |
+| 40 | `NrtSetCommTimeout(ms)` | `ms`: 超时时间（const uint16_t），单位：ms | `int` — CanEvoError::kOk 成功 | 0x00/0x10 写入通信超时时间 [非实时接口] |
 
-### 5.7 SDO 关节参数（阻塞，Index 0x01）
+### 5.8 SDO 关节参数（阻塞，Index 0x01）
 
 位置、速度、加速度相关接口的公开单位为 rad / rad/s / rad/s²，SDK 内部自动完成与协议层 deg / rpm 的转换。
 
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
-| 39 | `NrtGetGearRatio(num, den)` | `num`: [out] 分子（uint16_t&）<br>`den`: [out] 分母（uint16_t&） | `int` — CanEvoError::kOk 成功 | 0x01/0x00~0x01 获取减速比（R），减速比 = num / den [非实时接口] |
-| 40 | `NrtGetMaxSpeed()` | 无 | `float` — 最大速度，单位：rad/s | 0x01/0x02 获取最大速度（RW） [非实时接口] |
-| 41 | `NrtSetMaxSpeed(rads)` | `rads`: 最大速度（const float），单位：rad/s | `int` — CanEvoError::kOk 成功 | 0x01/0x02 设置最大速度 [非实时接口] |
-| 42 | `NrtGetMaxAccel()` | 无 | `float` — 最大加速度，单位：rad/s² | 0x01/0x03 获取最大加速度（RW） [非实时接口] |
-| 43 | `NrtSetMaxAccel(radss)` | `radss`: 最大加速度（const float），单位：rad/s² | `int` — CanEvoError::kOk 成功 | 0x01/0x03 设置最大加速度 [非实时接口] |
-| 44 | `NrtGetMaxDecel()` | 无 | `float` — 最大减速度，单位：rad/s² | 0x01/0x04 获取最大减速度（RW） [非实时接口] |
-| 45 | `NrtSetMaxDecel(radss)` | `radss`: 最大减速度（const float），单位：rad/s² | `int` — CanEvoError::kOk 成功 | 0x01/0x04 设置最大减速度 [非实时接口] |
-| 46 | `NrtGetEstopDecel()` | 无 | `float` — 急停减速度，单位：rad/s² | 0x01/0x05 获取急停减速度（RW） [非实时接口] |
-| 47 | `NrtSetEstopDecel(radss)` | `radss`: 急停减速度（const float），单位：rad/s² | `int` — CanEvoError::kOk 成功 | 0x01/0x05 设置急停减速度 [非实时接口] |
-| 48 | `NrtGetMaxPos()` | 无 | `float` — 最大位置，单位：rad | 0x01/0x06 获取最大位置（RW） [非实时接口] |
-| 49 | `NrtSetMaxPos(rad)` | `rad`: 最大位置（const float），单位：rad | `int` — CanEvoError::kOk 成功 | 0x01/0x06 设置最大位置 [非实时接口] |
-| 50 | `NrtGetMinPos()` | 无 | `float` — 最小位置，单位：rad | 0x01/0x07 获取最小位置（RW） [非实时接口] |
-| 51 | `NrtSetMinPos(rad)` | `rad`: 最小位置（const float），单位：rad | `int` — CanEvoError::kOk 成功 | 0x01/0x07 设置最小位置 [非实时接口] |
-| 52 | `NrtSetMechZero()` | 无 | `int` — CanEvoError::kOk 成功 | 0x01/0x08 设置机械零点（W，写入 0x0001 触发）。建议在伺服失能状态下执行 [非实时接口] |
-| 53 | `NrtGetMechZeroOk()` | 无 | `uint16_t` — 1=成功 | 0x01/0x09 读取机械零点设置成功标志（R） [非实时接口] |
-| 54 | `NrtSetPosLimitEnable(enable)` | `enable`: 使能标志（const uint16_t，1=使能/0=禁止） | `int` — CanEvoError::kOk 成功 | 0x01/0x0A 位置限制使能（W） [非实时接口] |
-| 55 | `NrtGetPosLimitStatus()` | 无 | `uint16_t` — 0=未使能，1=已使能 | 0x01/0x0B 读取位置限制状态（R） [非实时接口] |
-| 56 | `NrtSetBrakeControl(val)` | `val`: 抱闸控制字（const uint16_t）<br>kCanevoBrakeOpen(0xAA55)=打开<br>kCanevoBrakeClose(0xBB66)=关闭 | `int` — CanEvoError::kOk 成功 | 0x01/0x0C 抱闸控制（W） [非实时接口] |
-| 57 | `NrtGetBrakeStatus()` | 无 | `uint16_t` — 0=关闭，1=打开 | 0x01/0x0D 读取抱闸状态（R） [非实时接口] |
-| 58 | `NrtSaveParams()` | 无 | `int` — CanEvoError::kOk 成功 | 0x01/0xF0 保存参数（W，写入 0x0001 触发）。建议在伺服失能状态下执行 [非实时接口] |
-| 59 | `NrtGetSaveParamsOk()` | 无 | `uint16_t` — 1=成功 | 0x01/0xF1 读取参数保存成功标志（R） [非实时接口] |
+| 41 | `NrtGetGearRatio(num, den)` | `num`: [out] 分子（uint16_t&）<br>`den`: [out] 分母（uint16_t&） | `int` — CanEvoError::kOk 成功 | 0x01/0x00~0x01 获取减速比（R），减速比 = num / den [非实时接口] |
+| 42 | `NrtGetMaxSpeed()` | 无 | `float` — 最大速度，单位：rad/s | 0x01/0x02 获取最大速度（RW） [非实时接口] |
+| 43 | `NrtSetMaxSpeed(rads)` | `rads`: 最大速度（const float），单位：rad/s | `int` — CanEvoError::kOk 成功 | 0x01/0x02 设置最大速度 [非实时接口] |
+| 44 | `NrtGetMaxAccel()` | 无 | `float` — 最大加速度，单位：rad/s² | 0x01/0x03 获取最大加速度（RW） [非实时接口] |
+| 45 | `NrtSetMaxAccel(radss)` | `radss`: 最大加速度（const float），单位：rad/s² | `int` — CanEvoError::kOk 成功 | 0x01/0x03 设置最大加速度 [非实时接口] |
+| 46 | `NrtGetMaxDecel()` | 无 | `float` — 最大减速度，单位：rad/s² | 0x01/0x04 获取最大减速度（RW） [非实时接口] |
+| 47 | `NrtSetMaxDecel(radss)` | `radss`: 最大减速度（const float），单位：rad/s² | `int` — CanEvoError::kOk 成功 | 0x01/0x04 设置最大减速度 [非实时接口] |
+| 48 | `NrtGetEstopDecel()` | 无 | `float` — 急停减速度，单位：rad/s² | 0x01/0x05 获取急停减速度（RW） [非实时接口] |
+| 49 | `NrtSetEstopDecel(radss)` | `radss`: 急停减速度（const float），单位：rad/s² | `int` — CanEvoError::kOk 成功 | 0x01/0x05 设置急停减速度 [非实时接口] |
+| 50 | `NrtGetMaxPos()` | 无 | `float` — 最大位置，单位：rad | 0x01/0x06 获取最大位置（RW） [非实时接口] |
+| 51 | `NrtSetMaxPos(rad)` | `rad`: 最大位置（const float），单位：rad | `int` — CanEvoError::kOk 成功 | 0x01/0x06 设置最大位置 [非实时接口] |
+| 52 | `NrtGetMinPos()` | 无 | `float` — 最小位置，单位：rad | 0x01/0x07 获取最小位置（RW） [非实时接口] |
+| 53 | `NrtSetMinPos(rad)` | `rad`: 最小位置（const float），单位：rad | `int` — CanEvoError::kOk 成功 | 0x01/0x07 设置最小位置 [非实时接口] |
+| 54 | `NrtSetMechZero()` | 无 | `int` — CanEvoError::kOk 成功 | 0x01/0x08 设置机械零点（W，写入 0x0001 触发）。建议在伺服失能状态下执行 [非实时接口] |
+| 55 | `NrtGetMechZeroOk()` | 无 | `uint16_t` — 1=成功 | 0x01/0x09 读取机械零点设置成功标志（R） [非实时接口] |
+| 56 | `NrtSetPosLimitEnable(enable)` | `enable`: 使能标志（const uint16_t，1=使能/0=禁止） | `int` — CanEvoError::kOk 成功 | 0x01/0x0A 位置限制使能（W） [非实时接口] |
+| 57 | `NrtGetPosLimitStatus()` | 无 | `uint16_t` — 0=未使能，1=已使能 | 0x01/0x0B 读取位置限制状态（R） [非实时接口] |
+| 58 | `NrtSetBrakeControl(val)` | `val`: 抱闸控制字（const uint16_t）<br>kCanevoBrakeOpen(0xAA55)=打开<br>kCanevoBrakeClose(0xBB66)=关闭 | `int` — CanEvoError::kOk 成功 | 0x01/0x0C 抱闸控制（W） [非实时接口] |
+| 59 | `NrtGetBrakeStatus()` | 无 | `uint16_t` — 0=关闭，1=打开 | 0x01/0x0D 读取抱闸状态（R） [非实时接口] |
+| 60 | `NrtSaveParams()` | 无 | `int` — CanEvoError::kOk 成功 | 0x01/0xF0 保存参数（W，写入 0x0001 触发）。建议在伺服失能状态下执行 [非实时接口] |
+| 61 | `NrtGetSaveParamsOk()` | 无 | `uint16_t` — 1=成功 | 0x01/0xF1 读取参数保存成功标志（R） [非实时接口] |
 
-### 5.8 SDO 控制器参数（阻塞，Index 0x07）
+### 5.9 SDO 控制器参数（阻塞，Index 0x07）
 
 全部为 uint16 类型，RW 权限。
 
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
-| 60 | `NrtGetCtrlParam(sub)` | `sub`: 子索引（const uint8_t，0x00~0x0A） | `uint16_t` — 参数值，失败返回 0 | 0x07/sub 通用读取控制器参数 [非实时接口] |
-| 61 | `NrtSetCtrlParam(sub, val)` | `sub`: 子索引（const uint8_t，0x00~0x0A）<br>`val`: 写入值（const uint16_t） | `int` — CanEvoError::kOk 成功 | 0x07/sub 通用写入控制器参数 [非实时接口] |
+| 62 | `NrtGetCtrlParam(sub)` | `sub`: 子索引（const uint8_t，0x00~0x0A） | `uint16_t` — 参数值，失败返回 0 | 0x07/sub 通用读取控制器参数 [非实时接口] |
+| 63 | `NrtSetCtrlParam(sub, val)` | `sub`: 子索引（const uint8_t，0x00~0x0A）<br>`val`: 写入值（const uint16_t） | `int` — CanEvoError::kOk 成功 | 0x07/sub 通用写入控制器参数 [非实时接口] |
 
-### 5.9 SDO 编码器参数（阻塞，Index 0x08）
+### 5.10 SDO 编码器参数（阻塞，Index 0x08）
 
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
-| 62 | `NrtGetMotorEncRes()` | 无 | `uint32_t` — 分辨率，单位：Pulse/Rev | 0x08/0x00 读取电机轴编码器分辨率（R） [非实时接口] |
-| 63 | `NrtGetOutputEncRes()` | 无 | `uint32_t` — 分辨率，单位：Pulse/Rev | 0x08/0x01 读取输出轴编码器分辨率（R） [非实时接口] |
+| 64 | `NrtGetMotorEncRes()` | 无 | `uint32_t` — 分辨率，单位：Pulse/Rev | 0x08/0x00 读取电机轴编码器分辨率（R） [非实时接口] |
+| 65 | `NrtGetOutputEncRes()` | 无 | `uint32_t` — 分辨率，单位：Pulse/Rev | 0x08/0x01 读取输出轴编码器分辨率（R） [非实时接口] |
 
-### 5.10 SDO PP 模式轮廓参数（阻塞，Index 0x21）
+### 5.11 SDO PP 模式轮廓参数（阻塞，Index 0x21）
 
 一次性设置 PP 模式的所有轮廓参数，通过 SDO 写入 0x21/0x02, 0x21/0x07, 0x21/0x08, 0x21/0x09。
 
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
-| 64 | `NrtSetPpTargetPosition(target_pos_rad, profile_vel_rads, profile_acc_radss, profile_dec_radss)` | `target_pos_rad`: 目标位置（const float），单位：rad<br>`profile_vel_rads`: 轮廓速度（const float），单位：rad/s<br>`profile_acc_radss`: 轮廓加速度（const float），单位：rad/s²<br>`profile_dec_radss`: 轮廓减速度（const float），单位：rad/s² | `int` — CanEvoError::kOk 成功 | 一次性设置 PP 模式轮廓参数（0x21/0x02, 0x21/0x07, 0x21/0x08, 0x21/0x09） [非实时接口] |
+| 66 | `NrtSetPpTargetPosition(target_pos_rad, profile_vel_rads, profile_acc_radss, profile_dec_radss)` | `target_pos_rad`: 目标位置（const float），单位：rad<br>`profile_vel_rads`: 轮廓速度（const float），单位：rad/s<br>`profile_acc_radss`: 轮廓加速度（const float），单位：rad/s²<br>`profile_dec_radss`: 轮廓减速度（const float），单位：rad/s² | `int` — CanEvoError::kOk 成功 | 一次性设置 PP 模式轮廓参数（0x21/0x02, 0x21/0x07, 0x21/0x08, 0x21/0x09） [非实时接口] |
 
-### 5.11 SDO 关节实际状态（阻塞，Index 0x20，只读）
+### 5.12 SDO 关节实际状态（阻塞，Index 0x20，只读）
 
 读取关节的实际运行状态量，所有接口均为只读，用于诊断和标定。
 
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
-| 65 | `NrtGetActualPosition()` | 无 | `float` — 实际位置，单位：rad | 0x20/0x00 读取实际位置（R） [非实时接口] |
-| 66 | `NrtGetActualVelocity()` | 无 | `float` — 实际速度，单位：rad/s | 0x20/0x01 读取实际速度（R） [非实时接口] |
-| 67 | `NrtGetActualCurrent()` | 无 | `float` — 实际转矩电流，单位：A | 0x20/0x02 读取实际转矩电流（R） [非实时接口] |
-| 68 | `NrtGetActualAcceleration()` | 无 | `float` — 实际加速度，单位：rad/s² | 0x20/0x03 读取实际加速度（R） [非实时接口] |
-| 69 | `NrtGetActualTorque()` | 无 | `float` — 实际转矩，单位：Nm | 0x20/0x04 读取实际转矩（R） [非实时接口] |
-| 70 | `NrtGetPositionTrackingError()` | 无 | `float` — 位置跟踪误差，单位：rad | 0x20/0x05 读取位置跟踪误差（R） [非实时接口] |
-| 71 | `NrtGetBusVoltage()` | 无 | `float` — 母线电压，单位：V | 0x20/0x06 读取母线电压（R，raw×0.01→V） [非实时接口] |
-| 72 | `NrtGetPcbTemperature()` | 无 | `float` — PCB 温度，单位：℃ | 0x20/0x07 读取 PCB 温度（R，raw×0.1→℃） [非实时接口] |
-| 73 | `NrtGetMotorTemperature()` | 无 | `float` — 电机温度，单位：℃ | 0x20/0x08 读取电机温度（R，raw×0.1→℃） [非实时接口] |
-| 74 | `NrtGetGearboxTemperature()` | 无 | `float` — 减速器温度，单位：℃ | 0x20/0x09 读取减速器温度（R，raw×0.1→℃） [非实时接口] |
-| 75 | `NrtGetElectricalAngle()` | 无 | `float` — 电角度，单位：rad | 0x20/0x0A 读取电角度（R，raw×0.1 deg→rad） [非实时接口] |
+| 67 | `NrtGetActualPosition()` | 无 | `float` — 实际位置，单位：rad | 0x20/0x00 读取实际位置（R） [非实时接口] |
+| 68 | `NrtGetActualVelocity()` | 无 | `float` — 实际速度，单位：rad/s | 0x20/0x01 读取实际速度（R） [非实时接口] |
+| 69 | `NrtGetActualCurrent()` | 无 | `float` — 实际转矩电流，单位：A | 0x20/0x02 读取实际转矩电流（R） [非实时接口] |
+| 70 | `NrtGetActualAcceleration()` | 无 | `float` — 实际加速度，单位：rad/s² | 0x20/0x03 读取实际加速度（R） [非实时接口] |
+| 71 | `NrtGetActualTorque()` | 无 | `float` — 实际转矩，单位：Nm | 0x20/0x04 读取实际转矩（R） [非实时接口] |
+| 72 | `NrtGetPositionTrackingError()` | 无 | `float` — 位置跟踪误差，单位：rad | 0x20/0x05 读取位置跟踪误差（R） [非实时接口] |
+| 73 | `NrtGetBusVoltage()` | 无 | `float` — 母线电压，单位：V | 0x20/0x06 读取母线电压（R，raw×0.01→V） [非实时接口] |
+| 74 | `NrtGetPcbTemperature()` | 无 | `float` — PCB 温度，单位：℃ | 0x20/0x07 读取 PCB 温度（R，raw×0.1→℃） [非实时接口] |
+| 75 | `NrtGetMotorTemperature()` | 无 | `float` — 电机温度，单位：℃ | 0x20/0x08 读取电机温度（R，raw×0.1→℃） [非实时接口] |
+| 76 | `NrtGetGearboxTemperature()` | 无 | `float` — 减速器温度，单位：℃ | 0x20/0x09 读取减速器温度（R，raw×0.1→℃） [非实时接口] |
+| 77 | `NrtGetElectricalAngle()` | 无 | `float` — 电角度，单位：rad | 0x20/0x0A 读取电角度（R，raw×0.1 deg→rad） [非实时接口] |
 
-### 5.12 SDO 控制字操作（阻塞）
+### 5.13 SDO 控制字操作（阻塞）
 
 通过 SDO 直接读写控制字（0x21/0x00），每次只修改相应位，不改变其他位。操作完成后控制字立即生效，无需等待 PDO 发送。所有函数均为阻塞调用，会等待从站应答或超时。
 
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
-| 76 | `NrtEnable(mode)` | `mode`: 目标模式（const CanEvoMode） | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | SDO 方式伺服使能并设置工作模式（设置控制字 bit1 = 1 和 bit12~bit15）。通过 SDO 修改控制字，操作完成后控制字立即生效，无需等待 PDO 发送 [非实时接口] |
-| 77 | `NrtDisable()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | SDO 方式伺服失能（先切换到 CSP 模式，再设置控制字 bit1 = 0）。通过 SDO 修改控制字，先设置模式为 CSP（bit12~bit15），再失能（bit1=0），操作完成后控制字立即生效，无需等待 PDO 发送 [非实时接口] |
-| 79 | `NrtClearFault()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | SDO 方式清除故障（触发控制字 bit0 单周期脉冲）。通过 SDO 发送单周期脉冲(bit0=1然后自动清0)，仅在故障状态时有效 [非实时接口] |
-| 80 | `NrtEstop()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | SDO 方式触发急停（设置控制字 bit2 = 1）。通过 SDO 修改控制字 bit2=1，每次只修改急停位，不改变其他位 [非实时接口] |
-| 81 | `NrtClearEstop()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | SDO 方式清除急停（设置控制字 bit2 = 0）。通过 SDO 修改控制字 bit2=0，每次只修改急停位，不改变其他位 [非实时接口] |
+| 78 | `NrtEnable(mode)` | `mode`: 目标模式（const CanEvoMode） | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | SDO 方式伺服使能并设置工作模式（设置控制字 bit1 = 1 和 bit12~bit15）。通过 SDO 修改控制字，操作完成后控制字立即生效，无需等待 PDO 发送 [非实时接口] |
+| 79 | `NrtDisable()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | SDO 方式伺服失能（先切换到 CSP 模式，再设置控制字 bit1 = 0）。通过 SDO 修改控制字，先设置模式为 CSP（bit12~bit15），再失能（bit1=0），操作完成后控制字立即生效，无需等待 PDO 发送 [非实时接口] |
+| 80 | `NrtClearFault()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | SDO 方式清除故障（触发控制字 bit0 单周期脉冲）。通过 SDO 发送单周期脉冲(bit0=1然后自动清0)，仅在故障状态时有效 [非实时接口] |
+| 81 | `NrtEstop()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | SDO 方式触发急停（设置控制字 bit2 = 1）。通过 SDO 修改控制字 bit2=1，每次只修改急停位，不改变其他位 [非实时接口] |
+| 82 | `NrtClearEstop()` | 无 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | SDO 方式清除急停（设置控制字 bit2 = 0）。通过 SDO 修改控制字 bit2=0，每次只修改急停位，不改变其他位 [非实时接口] |
 
 > **与 Rt 接口的区别**：
 > - **Rt 接口**（如 `RtEnable(mode)`）：修改内部 controlword 缓存（非阻塞），下次 PDO 帧发送时自动携带生效，适用于实时控制循环
@@ -473,53 +521,102 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 ## 8. 典型用法
 
 ```cpp
+#include <csignal>
 #include "modi_joint_canevo.h"
 
+// 全局指针用于信号处理
+static modi_bus_canevo* g_bus = nullptr;
+static modi_joint_canevo* g_joint = nullptr;
+
+// 信号处理函数（Ctrl+C 优雅退出）
+void SignalHandler(int signum) {
+    std::cout << "\n收到中断信号，正在清理资源..." << std::endl;
+    
+    if (g_joint) {
+        g_joint->NrtDisable();  // 失能关节
+        g_joint->NrtDestroy();  // 释放关节资源
+    }
+    
+    if (g_bus) {
+        g_bus->Close();  // 关闭总线（自动停止控制循环和 Rx 线程）
+        std::cout << "资源已释放" << std::endl;
+    }
+    
+    std::exit(signum);
+}
+
 int main() {
-    // 1. 创建并打开总线
+    // 1. 配置任务参数
+    TaskConfig config;
+    config.period_us = 5000;    // 5ms 控制周期
+    config.priority = 99;       // 实时优先级 99（最高）
+    config.cpu_affinity = 2;    // 绑定到 CPU 2（隔离核心）
+
+    // 2. 创建总线和关节对象
     modi_bus_canevo bus;
-    bus.Open("can0");
+    modi_joint_canevo joint;
+    
+    g_bus = &bus;
+    g_joint = &joint;
+    
+    // 注册信号处理函数
+    std::signal(SIGINT, SignalHandler);   // Ctrl+C
+    std::signal(SIGTERM, SignalHandler);  // kill 命令
 
-    // 2. 创建并初始化关节
-    modi_joint_canevo j1, j2;
-    j1.NrtInit(bus, 1);
-    j2.NrtInit(bus, 2);
-
-    // 3. 配置模式并使能
-    j1.RtEnable(CanEvoMode::kCsp);
-    j2.RtEnable(CanEvoMode::kCsp);
-
-    // 4. 实时控制循环
-    uint8_t cnt = 0;
-    bool running = true;
-    while (running) {
-        bus.RtSendSync(cnt++);
-
-        JointStatus st;
-        j1.RtGetJointStatus(st);
-        // 使用 st.actual_pos_rad, st.actual_vel_rads 等...
-
-        j1.RtSetCspTargetPosition(1.57f);   // 目标位置 π/2 rad
-        j2.RtSetCspTargetPosition(3.14f);   // 目标位置 π rad
-
-        // 检查故障
-        CanEvoFault fault;
-        if (j1.RtGetEmcy(fault)) {
-            // 处理 EMCY 故障...
-        }
+    // 3. 打开总线（会自动锁定内存并配置实时参数）
+    if (bus.Open("can0", config) != static_cast<int>(CanEvoError::kOk)) {
+        std::cerr << "✗ 无法打开 CAN 总线" << std::endl;
+        return -1;
     }
 
-    // 5. 失能并释放
-    j1.RtDisable();
-    j2.RtDisable();
+    // 4. 初始化关节（会自动同步控制周期到关节）
+    if (joint.NrtInit(bus, 1) != static_cast<int>(CanEvoError::kOk)) {
+        std::cerr << "✗ 关节初始化失败" << std::endl;
+        bus.Close();
+        return -1;
+    }
 
-    j1.NrtDestroy();
-    j2.NrtDestroy();
-    bus.Close();
+    // 5. 设置机械零点（可选）
+    joint.NrtDisable();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    joint.NrtSetMechZero();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // 6. 使能关节
+    if (joint.NrtEnable(CanEvoMode::kCsp) != static_cast<int>(CanEvoError::kOk)) {
+        std::cerr << "✗ 关节使能失败" << std::endl;
+        bus.Close();
+        return -1;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // 7. 启动控制循环线程（使用 Lambda 捕获关节对象）
+    float target_pos_rad = 0.0f;
+    auto ret = bus.StartControlLoop([&joint, &target_pos_rad]() {
+        // 每个控制周期执行一次（5ms）
+        // SDK 会自动发送 SYNC 并管理实时调度
+        
+        target_pos_rad += 1.0f * (M_PI / 180.0f);  // 每次步进 1 度
+        joint.RtSetCspTargetPosition(target_pos_rad);
+        
+        // 可选：读取关节状态
+        // JointStatus st;
+        // joint.RtGetJointStatus(st);
+    });
+    
+    if (ret != static_cast<int>(CanEvoError::kOk)) {
+        std::cerr << "✗ 启动控制循环失败" << std::endl;
+        return -1;
+    }
+
+    std::cout << "控制循环运行中，按 Ctrl+C 终止..." << std::endl;
+
+    // 8. 等待控制循环线程（阻塞主线程，直到收到信号）
+    bus.Join();
+
     return 0;
 }
 ```
-
 ---
 
 ## 9. 注意事项

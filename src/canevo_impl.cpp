@@ -16,14 +16,19 @@
 #include <linux/can/raw.h>
 #include <net/if.h>
 #include <poll.h>
+#include <pthread.h>
+#include <sched.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 
 using namespace canevo;
@@ -106,10 +111,12 @@ modi_bus_canevo::Impl::Impl() = default;
 
 modi_bus_canevo::Impl::~Impl() { Close(); }
 
-int modi_bus_canevo::Impl::Open(const std::string& ifname) {
+int modi_bus_canevo::Impl::Open(const std::string& ifname,
+                                const TaskConfig& task_config) {
   if (sock_fd_ >= 0) return static_cast<int>(CanEvoError::kOk);  // 已打开
 
   ifname_ = ifname;
+  task_config_ = task_config;  // 保存配置
 
   /* 主 socket（Rx + SDO Tx 等） */
   sock_fd_ = CreateCanFdSocket(ifname);
@@ -127,24 +134,44 @@ int modi_bus_canevo::Impl::Open(const std::string& ifname) {
   rx_running_.store(true, std::memory_order_release);
   rx_thread_ = std::thread(&modi_bus_canevo::Impl::RxLoop, this);
 
-  /* 启动 Tx 线程 */
-  tx_running_.store(true, std::memory_order_release);
-  tx_thread_ = std::thread(&modi_bus_canevo::Impl::TxLoop, this);
+  // 配置 Rx 线程为实时优先级（使用 TaskConfig）
+  struct sched_param rx_param;
+  rx_param.sched_priority = task_config_.priority;
+  if (pthread_setschedparam(rx_thread_.native_handle(), SCHED_FIFO,
+                            &rx_param) != 0) {
+    std::cerr << "警告: 无法设置 RX 线程实时优先级 (errno=" << errno << ")"
+              << std::endl;
+  }
+
+  // 配置 Rx 线程 CPU 亲和性（使用 TaskConfig）
+  cpu_set_t rx_cpuset;
+  CPU_ZERO(&rx_cpuset);
+  CPU_SET(task_config_.cpu_affinity, &rx_cpuset);
+  if (pthread_setaffinity_np(rx_thread_.native_handle(), sizeof(rx_cpuset),
+                             &rx_cpuset) != 0) {
+    std::cerr << "警告: 无法设置 RX 线程 CPU 亲和性 (errno=" << errno << ")"
+              << std::endl;
+  }
+
+  /* 锁定内存（防止页面交换） */
+  if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+    std::cerr << "警告: 无法锁定内存 (errno=" << errno << ")" << std::endl;
+  }
 
   return static_cast<int>(CanEvoError::kOk);
 }
 
 void modi_bus_canevo::Impl::Close() {
+  /* 停止控制循环 */
+  if (ctrl_running_.load(std::memory_order_acquire)) {
+    ctrl_running_.store(false, std::memory_order_release);
+    if (ctrl_thread_.joinable()) ctrl_thread_.join();
+  }
+
   /* 停止 Rx */
   if (rx_running_.load(std::memory_order_acquire)) {
     rx_running_.store(false, std::memory_order_release);
     if (rx_thread_.joinable()) rx_thread_.join();
-  }
-
-  /* 停止 Tx */
-  if (tx_running_.load(std::memory_order_acquire)) {
-    tx_running_.store(false, std::memory_order_release);
-    if (tx_thread_.joinable()) tx_thread_.join();
   }
 
   if (sync_fd_ >= 0) {
@@ -171,12 +198,6 @@ int modi_bus_canevo::Impl::Send(const CanFrame& f) {
              : static_cast<int>(CanEvoError::kSendFailed);
 }
 
-int modi_bus_canevo::Impl::EnqueueTx(const CanFrame& f) {
-  if (sock_fd_ < 0) return static_cast<int>(CanEvoError::kBusNotOpen);
-  return tx_q_.push(f) ? static_cast<int>(CanEvoError::kOk)
-                       : static_cast<int>(CanEvoError::kQueueFull);
-}
-
 int modi_bus_canevo::Impl::SendSync(uint8_t counter) {
   if (sync_fd_ < 0) return static_cast<int>(CanEvoError::kBusNotOpen);
 
@@ -190,6 +211,128 @@ int modi_bus_canevo::Impl::SendSync(uint8_t counter) {
   return (SendFrame(sync_fd_, f) == 0)
              ? static_cast<int>(CanEvoError::kOk)
              : static_cast<int>(CanEvoError::kSendFailed);
+}
+
+/* ---- 控制循环线程接口 ---- */
+int modi_bus_canevo::Impl::StartControlLoop(ControlLoopCallback callback) {
+  if (sock_fd_ < 0) return static_cast<int>(CanEvoError::kBusNotOpen);
+
+  // 检查是否已有控制循环在运行
+  if (ctrl_running_.load(std::memory_order_acquire)) {
+    return static_cast<int>(CanEvoError::kInvalidParam);  // 已在运行
+  }
+
+  // 保存回调函数（周期等配置已在 Open() 时保存到 task_config_）
+  ctrl_callback_ = callback;
+
+  // 启动控制线程（优先级和CPU亲和性在线程内部设置）
+  ctrl_running_.store(true, std::memory_order_release);
+  ctrl_thread_ = std::thread(&modi_bus_canevo::Impl::ControlLoop, this);
+
+  return static_cast<int>(CanEvoError::kOk);
+}
+
+int modi_bus_canevo::Impl::StopControlLoop() {
+  if (!ctrl_running_.load(std::memory_order_acquire)) {
+    return static_cast<int>(CanEvoError::kOk);  // 未在运行
+  }
+
+  ctrl_running_.store(false, std::memory_order_release);
+  if (ctrl_thread_.joinable()) {
+    ctrl_thread_.join();
+  }
+
+  return static_cast<int>(CanEvoError::kOk);
+}
+
+void modi_bus_canevo::Impl::Join() {
+  if (ctrl_thread_.joinable()) {
+    ctrl_thread_.join();
+  }
+}
+
+/* ---- 控制循环线程函数 ---- */
+
+void modi_bus_canevo::Impl::ControlLoop() {
+  std::cerr << "[控制循环] 线程已启动，周期: " << task_config_.period_us
+            << " us" << std::endl;
+  // 1. 设置线程优先级和 CPU 亲和性（使用 TaskConfig）
+  struct sched_param param;
+  param.sched_priority = task_config_.priority;
+  if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0) {
+    std::cerr << "警告: 无法设置控制循环线程实时优先级 (errno=" << errno << ")"
+              << std::endl;
+  }
+
+  // 设置 CPU 亲和性
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+  CPU_SET(task_config_.cpu_affinity, &cpuset);
+  if (pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset) != 0) {
+    std::cerr << "警告: 无法设置控制循环线程 CPU 亲和性 (errno=" << errno << ")"
+              << std::endl;
+  }
+
+  // 2. 主控制循环
+  uint8_t sync_counter = 0;
+  struct timespec next_wakeup;
+  clock_gettime(CLOCK_MONOTONIC, &next_wakeup);
+  const long period_ns = task_config_.period_us * 1000L;  // us -> ns
+
+  while (ctrl_running_.load(std::memory_order_acquire)) {
+    // 先计算下一次目标唤醒时间
+    next_wakeup = CalWaitClock(next_wakeup, period_ns);
+
+    // 发送 SYNC
+    SendSync(sync_counter++);  // 0-255循环,自动溢出：255→0
+    if (ctrl_callback_) {
+      try {
+        ctrl_callback_();
+      } catch (const std::exception& e) {
+        std::cerr << "[控制循环] 回调函数异常: " << e.what() << std::endl;
+      } catch (...) {
+        std::cerr << "[控制循环] 回调函数发生未知异常" << std::endl;
+      }
+    }
+
+    // 获取当前时间，判断是否超时
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+
+    // 比较当前时间和目标唤醒时间
+    if (now.tv_sec < next_wakeup.tv_sec ||
+        (now.tv_sec == next_wakeup.tv_sec &&
+         now.tv_nsec < next_wakeup.tv_nsec)) {
+      // 正常情况：还没到目标时间，睡眠到目标时间点
+      clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, nullptr);
+    } else {
+      // 超时情况：当前时间已超过目标时间
+      long overrun_ns = (now.tv_sec - next_wakeup.tv_sec) * 1000000000L +
+                        (now.tv_nsec - next_wakeup.tv_nsec);
+      std::cerr << "[控制循环] 警告: 周期超时 " << (overrun_ns / 1000.0)
+                << " us (周期=" << task_config_.period_us << " us)"
+                << std::endl;
+
+      // 重新同步到当前时间（下次循环开始会自动加 period_ns）
+      next_wakeup = now;
+    }
+  }
+
+  std::cerr << "[控制循环] 线程已停止" << std::endl;
+}
+
+struct timespec modi_bus_canevo::Impl::CalWaitClock(
+    const struct timespec& current, long period_ns) const {
+  struct timespec target = current;
+  target.tv_nsec += period_ns;
+
+  // 处理纳秒溢出
+  if (target.tv_nsec >= 1000000000L) {
+    target.tv_sec += 1;
+    target.tv_nsec -= 1000000000L;
+  }
+
+  return target;
 }
 
 void modi_bus_canevo::Impl::RegisterJoint(uint8_t node_id,
@@ -229,20 +372,6 @@ void modi_bus_canevo::Impl::RxLoop() {
   }
 }
 
-/* ---- Tx 线程 ---- */
-void modi_bus_canevo::Impl::TxLoop() {
-  while (tx_running_.load(std::memory_order_acquire)) {
-    CanFrame f;
-    if (tx_q_.pop(f)) {
-      std::lock_guard<std::mutex> lk(tx_mu_);
-      SendFrame(sock_fd_, f);
-    } else {
-      /* 空闲时短暂让出 CPU（~50us） */
-      std::this_thread::sleep_for(std::chrono::microseconds(50));
-    }
-  }
-}
-
 /* ---- 帧分发 ---- */
 void modi_bus_canevo::Impl::DispatchFrame(const CanFrame& f) {
   /* 根据 cob_id 确定 node_id */
@@ -278,7 +407,6 @@ int modi_joint_canevo::Impl::Init(modi_bus_canevo::Impl* bus, uint8_t node_id) {
   controlword_.store(0, std::memory_order_relaxed);
   fault_clr_pending_.store(false, std::memory_order_relaxed);
   status_valid_ = false;
-  bus->RegisterJoint(node_id, this);
   return static_cast<int>(CanEvoError::kOk);
 }
 
@@ -362,7 +490,7 @@ int modi_joint_canevo::Impl::SendRxPdo0(float target_pos_deg) {
   WriteF32LE(f.data + 2, target_pos_deg);
   /* data[2..3] 保留 */
 
-  return bus_->EnqueueTx(f);
+  return bus_->Send(f);
 }
 
 int modi_joint_canevo::Impl::SendRxPdo1(float target_vel_rpm) {
@@ -374,7 +502,7 @@ int modi_joint_canevo::Impl::SendRxPdo1(float target_vel_rpm) {
   WriteU16LE(f.data + 0, ConsumeControlword());
   WriteF32LE(f.data + 2, target_vel_rpm);
 
-  return bus_->EnqueueTx(f);
+  return bus_->Send(f);
 }
 
 int modi_joint_canevo::Impl::SendRxPdo2(float target_cur_a) {
@@ -386,7 +514,7 @@ int modi_joint_canevo::Impl::SendRxPdo2(float target_cur_a) {
   WriteU16LE(f.data + 0, ConsumeControlword());
   WriteF32LE(f.data + 4, target_cur_a);
 
-  return bus_->EnqueueTx(f);
+  return bus_->Send(f);
 }
 
 int modi_joint_canevo::Impl::SendRxPdo3(float target_pos_deg,
@@ -405,7 +533,7 @@ int modi_joint_canevo::Impl::SendRxPdo3(float target_pos_deg,
   WriteF32LE(f.data + 10, profile_acc_rpms);
   WriteF32LE(f.data + 14, profile_dec_rpms);
 
-  return bus_->EnqueueTx(f);
+  return bus_->Send(f);
 }
 
 /* ============================================================
@@ -481,12 +609,11 @@ int modi_joint_canevo::Impl::SdoRead(uint8_t index, uint8_t sub, uint8_t* out,
 /* ============================================================
  * SDO 阻塞写
  *
- * 帧格式：
+ * 帧格式（根据 CanEvo 协议 V1.2.3 表 7）：
  * Byte 0     : cmd (0x02 写请求)
  * Byte 1     : index
  * Byte 2     : sub
- * Byte 3     : data_len (1~4)
- * Byte 4~7   : data (little-endian)
+ * Byte 3~6   : data (little-endian, 1~4 bytes)
  *
  * cob_id = 0x780 + node_id
  * ============================================================ */
@@ -507,7 +634,7 @@ int modi_joint_canevo::Impl::SdoWrite(uint8_t index, uint8_t sub,
   f.data[0] = kSdoCmdWr;
   f.data[1] = index;
   f.data[2] = sub;
-  //f.data[3] = len;
+  // f.data[3] = len;
   std::memcpy(f.data + 3, data, len);
 
   sdo_pending_.cmd = kSdoCmdWr;
@@ -561,125 +688,130 @@ int modi_joint_canevo::Impl::sdoWriteI16(uint8_t index, uint8_t sub,
   return SdoWrite(index, sub, buf, 2);
 }
 
-int modi_joint_canevo::Impl::sdoReadU32(uint8_t index, uint8_t sub,
-                                        uint32_t& val) {
-  uint8_t buf[4] = {};
-  uint8_t alen = 0;
-  int ret = SdoRead(index, sub, buf, 4, alen);
-  if (ret == static_cast<int>(CanEvoError::kOk)) val = ReadU32LE(buf);
-  return ret;
-}
-
-int modi_joint_canevo::Impl::sdoWriteU32(uint8_t index, uint8_t sub,
-                                         uint32_t val) {
-  uint8_t buf[4];
-  WriteU32LE(buf, val);
-  return SdoWrite(index, sub, buf, 4);
-}
-
-int modi_joint_canevo::Impl::sdoReadF32(uint8_t index, uint8_t sub,
-                                        float& val) {
-  uint8_t buf[4] = {};
-  uint8_t alen = 0;
-  int ret = SdoRead(index, sub, buf, 4, alen);
-  if (ret == static_cast<int>(CanEvoError::kOk)) val = ReadF32LE(buf);
-  return ret;
-}
-
-int modi_joint_canevo::Impl::sdoWriteF32(uint8_t index, uint8_t sub,
-                                         float val) {
-  uint8_t buf[4];
-  WriteF32LE(buf, val);
-  return SdoWrite(index, sub, buf, 4);
-}
-
-/* ============================================================
- * Bus Rx 线程回调入口
- * ============================================================ */
-
-void modi_joint_canevo::Impl::HandleFrame(const CanFrame& f) {
-  /* 判断帧类型 */
-  if (f.id == kCobSdoRspBase + node_id_) {
-    OnSdoResp(f);
-  } else if (f.id == kCobTxPdo0Base + node_id_) {
-    OnTxPdo0(f);
-  } else if (f.id == kCobEmcyBase + node_id_) {
-    OnEmcy(f);
+  int modi_joint_canevo::Impl::sdoReadU32(uint8_t index, uint8_t sub,
+                                          uint32_t& val) {
+    uint8_t buf[4] = {};
+    uint8_t alen = 0;
+    int ret = SdoRead(index, sub, buf, 4, alen);
+    if (ret == static_cast<int>(CanEvoError::kOk)) val = ReadU32LE(buf);
+    return ret;
   }
-}
 
-void modi_joint_canevo::Impl::OnSdoResp(const CanFrame& f) {
-  std::lock_guard<std::mutex> lk(sdo_mu_);
+  int modi_joint_canevo::Impl::sdoWriteU32(uint8_t index, uint8_t sub,
+                                           uint32_t val) {
+    uint8_t buf[4];
+    WriteU32LE(buf, val);
+    return SdoWrite(index, sub, buf, 4);
+  }
 
-  if (sdo_pending_.done) return;
+  int modi_joint_canevo::Impl::sdoReadF32(uint8_t index, uint8_t sub,
+                                          float& val) {
+    uint8_t buf[4] = {};
+    uint8_t alen = 0;
+    int ret = SdoRead(index, sub, buf, 4, alen);
+    if (ret == static_cast<int>(CanEvoError::kOk)) val = ReadF32LE(buf);
+    return ret;
+  }
 
-  uint8_t cmd = f.data[0];
+  int modi_joint_canevo::Impl::sdoWriteF32(uint8_t index, uint8_t sub,
+                                           float val) {
+    uint8_t buf[4];
+    WriteF32LE(buf, val);
+    return SdoWrite(index, sub, buf, 4);
+  }
 
-  /* 应答故障 */
-  if (cmd & kSdoCmdAbortBit) {
-    sdo_pending_.abort_code = ReadU16LE(f.data + 4);
-    sdo_pending_.result = static_cast<int>(CanEvoError::kSdoAbort);
+  int modi_joint_canevo::Impl::SetSyncPeriod(uint16_t period_us) {
+    return sdoWriteU16(0x00, 0x0F, period_us);
+  }
+
+  /* ============================================================
+   * Bus Rx 线程回调入口
+   * ============================================================ */
+
+  void modi_joint_canevo::Impl::HandleFrame(const CanFrame& f) {
+    /* 判断帧类型 */
+    if (f.id == kCobSdoRspBase + node_id_) {
+      OnSdoResp(f);
+    } else if (f.id == kCobTxPdo0Base + node_id_) {
+      OnTxPdo0(f);
+    } else if (f.id == kCobEmcyBase + node_id_) {
+      OnEmcy(f);
+    }
+  }
+
+  void modi_joint_canevo::Impl::OnSdoResp(const CanFrame& f) {
+    std::lock_guard<std::mutex> lk(sdo_mu_);
+
+    if (sdo_pending_.done) return;
+
+    uint8_t cmd = f.data[0];
+
+    /* 应答故障 */
+    if (cmd & kSdoCmdAbortBit) {
+      sdo_pending_.abort_code = ReadU16LE(f.data + 4);
+      sdo_pending_.result = static_cast<int>(CanEvoError::kSdoAbort);
+      sdo_pending_.done = true;
+      sdo_cv_.notify_one();
+      return;
+    }
+
+    /* 校验 index/sub */
+    if (f.data[1] != sdo_pending_.index || f.data[2] != sdo_pending_.sub)
+      return;
+
+    if (sdo_pending_.cmd == kSdoCmdRd) {
+      /* CanEvo 协议：数据从 Byte3 开始，长度 = f.len - 3 */
+      uint8_t dlen = f.len - 3;  // 总长度减去3字节头
+      if (dlen > 4) dlen = 4;    // 最多4字节
+
+      std::memcpy(sdo_pending_.payload, f.data + 3, dlen);
+      sdo_pending_.payload_len = dlen;
+      sdo_pending_.result = static_cast<int>(CanEvoError::kOk);
+
+    } else if (sdo_pending_.cmd == kSdoCmdWr) {
+      sdo_pending_.result = static_cast<int>(CanEvoError::kOk);
+    }
+
     sdo_pending_.done = true;
     sdo_cv_.notify_one();
-    return;
+  }
+  /* ============================================================
+   * TxPDO0 解析
+   *
+   * 默认映射 (CanEvo V1.2.3)：
+   * 默认映射 (CanEvo V1.2.3)：
+   *   Byte  0~1  : statusword (uint16)
+   *   Byte  2~5  : actual_pos (float, °)
+   *   Byte  6~9 : actual_vel (float, rpm)
+   *   Byte 10~13 : actual_cur (float, A)
+   *   Byte 14~17 : actual_acc (float, rpm/s)
+   *   Byte 18~19 : bus_voltage (uint16, *0.01 => V)
+   *   Byte 20~21 : pcb_temp   (int16, *0.1 => ℃)
+   *   Byte 22~23 : motor_temp (int16, *0.1 => ℃)
+   * ============================================================ */
+
+  void modi_joint_canevo::Impl::OnTxPdo0(const CanFrame& f) {
+    if (f.len < 24) return;  // 至少需要 24 字节
+
+    JointStatus st;
+    st.statusword = ReadU16LE(f.data + 0);
+    st.actual_pos_rad = ReadF32LE(f.data + 2) * kDegToRad;
+    st.actual_vel_rads = ReadF32LE(f.data + 6) * kRpmToRads;
+    st.actual_cur_a = ReadF32LE(f.data + 10);
+    st.actual_acc_radss = ReadF32LE(f.data + 14) * kRpmToRads;
+    st.bus_voltage_v = ReadU16LE(f.data + 18) * 0.01f;
+    st.pcb_temp_c = ReadI16LE(f.data + 20) * 0.1f;
+    st.motor_temp_c = ReadI16LE(f.data + 22) * 0.1f;
+
+    {
+      std::lock_guard<std::mutex> lk(status_mu_);
+      status_cache_ = st;
+      status_valid_ = true;
+    }
   }
 
-  /* 校验 index/sub */
-  if (f.data[1] != sdo_pending_.index || f.data[2] != sdo_pending_.sub) return;
-
-  if (sdo_pending_.cmd == kSdoCmdRd) {
-    /* CanEvo 协议：数据从 Byte3 开始，长度 = f.len - 3 */
-    uint8_t dlen = f.len - 3;  // 总长度减去3字节头
-    if (dlen > 4) dlen = 4;    // 最多4字节
-    
-    std::memcpy(sdo_pending_.payload, f.data + 3, dlen);
-    sdo_pending_.payload_len = dlen;
-    sdo_pending_.result = static_cast<int>(CanEvoError::kOk);
-    
-  } else if (sdo_pending_.cmd == kSdoCmdWr) {
-    sdo_pending_.result = static_cast<int>(CanEvoError::kOk);
+  void modi_joint_canevo::Impl::OnEmcy(const CanFrame& f) {
+    if (f.len < 2) return;
+    uint16_t fault = ReadU16LE(f.data);
+    emcy_q_.push(fault);
   }
-
-  sdo_pending_.done = true;
-  sdo_cv_.notify_one();
-}
-/* ============================================================
- * TxPDO0 解析
- *
- * 默认映射 (CanEvo V1.2.3)：
- * 默认映射 (CanEvo V1.2.3)：
- *   Byte  0~1  : statusword (uint16)
- *   Byte  2~5  : actual_pos (float, °)
- *   Byte  6~9 : actual_vel (float, rpm)
- *   Byte 10~13 : actual_cur (float, A)
- *   Byte 14~17 : actual_acc (float, rpm/s)
- *   Byte 18~19 : bus_voltage (uint16, *0.01 => V)
- *   Byte 20~21 : pcb_temp   (int16, *0.1 => ℃)
- *   Byte 22~23 : motor_temp (int16, *0.1 => ℃)
- * ============================================================ */
-
-void modi_joint_canevo::Impl::OnTxPdo0(const CanFrame& f) {
-  if (f.len < 24) return;  // 至少需要 24 字节
-
-  JointStatus st;
-  st.statusword = ReadU16LE(f.data + 0);
-  st.actual_pos_rad = ReadF32LE(f.data + 2) * kDegToRad;
-  st.actual_vel_rads = ReadF32LE(f.data + 6) * kRpmToRads;
-  st.actual_cur_a = ReadF32LE(f.data + 10);
-  st.actual_acc_radss = ReadF32LE(f.data + 14) * kRpmToRads;
-  st.bus_voltage_v = ReadU16LE(f.data + 18) * 0.01f;
-  st.pcb_temp_c = ReadI16LE(f.data + 20) * 0.1f;
-  st.motor_temp_c = ReadI16LE(f.data + 22) * 0.1f;
-
-  {
-    std::lock_guard<std::mutex> lk(status_mu_);
-    status_cache_ = st;
-    status_valid_ = true;
-  }
-}
-
-void modi_joint_canevo::Impl::OnEmcy(const CanFrame& f) {
-  if (f.len < 2) return;
-  uint16_t fault = ReadU16LE(f.data);
-  emcy_q_.push(fault);
-}

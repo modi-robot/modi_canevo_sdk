@@ -57,8 +57,10 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 /* ============================================================
  * 错误码
@@ -175,11 +177,28 @@ struct JointStatus {
   float motor_temp_c = 0.0f;  /**< 电机温度 (℃) — 由 raw*0.1 转换 */
 };
 
+struct TaskConfig {
+  int period_us = 5000; /**< 控制周期 (us, 微秒) */
+  int priority = 90;    /**< 实时优先级 */
+  int cpu_affinity = 2; /**< CPU 亲和性（绑定到哪个核心） */
+};
+
 /* ============================================================
  * 前置声明
  * ============================================================ */
 
 class modi_joint_canevo;
+/**
+ * @brief 控制循环回调函数类型
+ *
+ * 用户实现此函数，在每个控制周期被调用一次。
+ * 典型使用：读取关节状态、计算控制量、发送控制命令。
+ *
+ * @note 建议使用 Lambda 捕获关节对象和状态变量
+ * @note 示例：auto callback = [&joint]() { joint.RtSetCspTargetPosition(...);
+ * };
+ */
+using ControlLoopCallback = std::function<void()>;
 
 /* ============================================================
  * modi_bus_canevo — 总线管理
@@ -205,14 +224,20 @@ class modi_bus_canevo {
   modi_bus_canevo& operator=(const modi_bus_canevo&) = delete;
 
   /**
-   * @brief 打开 SocketCAN 总线
+   * @brief 打开 SocketCAN 总线并配置任务参数
    * @param can_ifname SocketCAN 接口名，例如 "can0"
+   * @param task_config
+   * 任务配置（控制周期(us)、优先级、CPU亲和性），使用默认值则为
+   * 5000us(5ms)、优先级99、CPU 2
    * @return CanEvoError::kOk 成功，其他为失败
+   * @note 配置会应用于 Rx 线程和控制循环线程
    */
-  int Open(const std::string& can_ifname);
+  int Open(const std::string& can_ifname,
+           const TaskConfig& task_config = TaskConfig());
 
   /**
    * @brief 关闭总线，释放所有资源
+   * @note 会自动停止控制循环线程和 Rx 线程
    */
   void Close();
 
@@ -243,6 +268,18 @@ class modi_bus_canevo {
    * @param ms 超时毫秒数
    */
   void SetPdoTimeoutMs(const int ms);
+
+  /**
+   * @brief 启动实时控制循环线程
+   * @param callback 每个控制周期调用的回调函数
+   * @return CanEvoError::kOk 成功，其他为失败
+   */
+  int StartControlLoop(ControlLoopCallback callback);
+
+  /**
+   * @brief 等待控制循环线程结束,如果控制循环未启动,则立即返回
+   */
+  void Join();
 
  private:
 
@@ -492,8 +529,6 @@ class modi_joint_canevo {
 
   /** @brief 0x00/0x0F 读取同步周期 (uint16, RW, 单位 us) [非实时接口] */
   uint16_t NrtGetSyncPeriod();
-  /** @brief 0x00/0x0F 写入同步周期 (uint16, RW, 单位 us) [非实时接口] */
-  int NrtSetSyncPeriod(const uint16_t us);
 
   /** @brief 0x00/0x10 读取通信超时时间 (uint16, RW, 单位 ms) [非实时接口] */
   uint16_t NrtGetCommTimeout();
@@ -672,7 +707,7 @@ class modi_joint_canevo {
   /**
    * @brief 获取伺服状态机状态 [实时接口]
    * @return CanEvoServoState 枚举
-   */
+      */
   CanEvoServoState RtGetServoState();
 
   /**
@@ -690,6 +725,27 @@ class modi_joint_canevo {
    * @brief 检查是否有警告 [实时接口]
    */
   bool RtHasWarning();
+
+  /**
+   * @brief 通过 SDO 获取伺服状态机状态 [非实时接口]
+   * @return CanEvoServoState 枚举
+   * @note 通过 SDO 读取状态字（0x21/0x01），阻塞调用
+   */
+  CanEvoServoState NrtGetServoState();
+
+  /**
+   * @brief 通过 SDO 获取当前工作模式 [非实时接口]
+   * @return CanEvoMode 枚举
+   * @note 通过 SDO 读取状态字（0x21/0x01），阻塞调用
+   */
+  CanEvoMode NrtGetCurrentMode();
+
+  /**
+   * @brief 通过 SDO 检查是否处于运行状态（伺服使能） [非实时接口]
+   * @return true 如果处于运行状态
+   * @note 通过 SDO 读取状态字（0x21/0x01），阻塞调用
+   */
+  bool NrtIsRunning();
 
  private:
 

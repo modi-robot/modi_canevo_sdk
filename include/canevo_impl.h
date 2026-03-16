@@ -231,15 +231,12 @@ class modi_bus_canevo::Impl {
   Impl(const Impl&) = delete;
   Impl& operator=(const Impl&) = delete;
 
-  int Open(const std::string& ifname);
+  int Open(const std::string& ifname, const TaskConfig& task_config);
   void Close();
   bool IsOpen() const { return sock_fd_ >= 0; }
 
   /* 发送（线程安全） */
   int Send(const canevo::CanFrame& f);
-
-  /* 实时发送队列（PDO 入队，Tx 线程执行 write） */
-  int EnqueueTx(const canevo::CanFrame& f);
 
   /* SYNC 发送（独立 fd） */
   int SendSync(uint8_t counter);
@@ -254,9 +251,17 @@ class modi_bus_canevo::Impl {
   int DefaultSdoTimeoutMs() const { return default_sdo_timeout_ms_; }
   int DefaultPdoTimeoutMs() const { return default_pdo_timeout_ms_; }
 
+  /* 任务配置访问 */
+  const TaskConfig& GetTaskConfig() const { return task_config_; }
+
   /* 协议辅助 */
   uint8_t DlcToLen(uint8_t dlc) const;
   uint8_t LenToDlc(uint8_t len) const;
+
+  /* 控制循环线程接口 */
+  int StartControlLoop(ControlLoopCallback callback);
+  int StopControlLoop();
+  void Join();
 
  private:
 
@@ -268,11 +273,6 @@ class modi_bus_canevo::Impl {
   std::atomic<bool> rx_running_{false};
   std::thread rx_thread_;
 
-  /* Tx 线程 + SPSC 无锁发送队列 */
-  std::atomic<bool> tx_running_{false};
-  std::thread tx_thread_;
-  canevo::SpscRingQueue<canevo::CanFrame, 1024> tx_q_;
-
   /* 发送互斥（用于 SDO 等非实时发送） */
   std::mutex tx_mu_;
 
@@ -280,13 +280,23 @@ class modi_bus_canevo::Impl {
   int default_sdo_timeout_ms_ = 100;
   int default_pdo_timeout_ms_ = 50;
 
+  /* 任务配置（Open 时设置） */
+  TaskConfig task_config_;
+
   /* Joint 注册表 */
   std::mutex map_mu_;
-  std::unordered_map<uint8_t, modi_joint_canevo::Impl*> joints_;
+  std::unordered_map<uint8_t, modi_joint_canevo::Impl*> joints_;  // 统一注册表
+
+  /* 控制循环线程 */
+  std::atomic<bool> ctrl_running_{false};
+  std::thread ctrl_thread_;
+  ControlLoopCallback ctrl_callback_;
 
   /* 线程入口 */
   void RxLoop();
-  void TxLoop();
+  void ControlLoop();
+  struct timespec CalWaitClock(const struct timespec& current,
+                               long period_ns) const;
 
   /* 帧分发 */
   void DispatchFrame(const canevo::CanFrame& f);
@@ -353,6 +363,10 @@ class modi_joint_canevo::Impl {
   int sdoWriteU32(uint8_t index, uint8_t sub, uint32_t val);
   int sdoReadF32(uint8_t index, uint8_t sub, float& val);
   int sdoWriteF32(uint8_t index, uint8_t sub, float val);
+
+  /* ---- 内部配置接口 ---- */
+  /** @brief 设置同步周期 (0x00/0x0F) - 在 NrtInit 时自动调用 */
+  int SetSyncPeriod(uint16_t period_us);
 
   /* ---- Bus Rx 线程回调入口 ---- */
   void HandleFrame(const canevo::CanFrame& f);
