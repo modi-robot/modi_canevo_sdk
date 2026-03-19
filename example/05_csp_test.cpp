@@ -83,18 +83,17 @@ int main() {
     return -1;
   }
   std::cout << "✓ Joint 初始化完成 (Node ID: 1" << std::endl;
-
   // 6. 设置机械零点
   joint.NrtDisable();
-  while (joint.NrtGetServoState() != CanEvoServoState::kDisabled) {
+  while (joint.NrtGetServoState() != CanEvoServoState::kReady) {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
+  
   joint.NrtSetMechZero();
   while (joint.NrtGetMechZeroOk() != 1) {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
   std::cout << "✓ 机械零点已设置" << std::endl;
-
   if (joint.NrtEnable(CanEvoMode::kCsp) != static_cast<int>(CanEvoError::kOk)) {
     std::cerr << "✗ 关节使能失败" << std::endl;
     bus.Close();
