@@ -75,12 +75,12 @@ int modi_joint_canevo::NrtInit(modi_bus_canevo& bus, const uint8_t node_id) {
   
   
   // 发布90个同步帧,后续可能需要删除掉
-  uint8_t sync = 0;
-  for (int i = 0; i < 90; i++) {
-    bus.RtSendSync(sync++);
+  //uint8_t sync = 0;
+  //for (int i = 0; i < 90; i++) {
+   // bus.RtSendSync(sync++);
     //joint.RtSetCspTargetPosition(current_pos_rad);
-    std::this_thread::sleep_for(std::chrono::milliseconds(PERIOD_MS));
-  }
+    //std::this_thread::sleep_for(std::chrono::milliseconds(PERIOD_MS));
+  //}
 
   int ret = impl_->Init(bus.impl_.get(), node_id);
   if (ret == static_cast<int>(CanEvoError::kOk)) {
