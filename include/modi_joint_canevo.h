@@ -227,8 +227,8 @@ class modi_bus_canevo {
    * @brief 打开 SocketCAN 总线并配置任务参数
    * @param can_ifname SocketCAN 接口名，例如 "can0"
    * @param task_config
-   * 任务配置（控制周期(us)、优先级、CPU亲和性），使用默认值则为
-   * 5000us(5ms)、优先级99、CPU 2
+   * 任务配置（控制周期 us、优先级、CPU 亲和性），使用默认值则为
+   * 5000 us（5 ms）、优先级 90、CPU 2
    * @return CanEvoError::kOk 成功，其他为失败
    * @note 配置会应用于 Rx 线程和控制循环线程
    */
@@ -277,7 +277,7 @@ class modi_bus_canevo {
   int StartControlLoop(ControlLoopCallback callback);
 
   /**
-   * @brief 等待控制循环线程结束,如果控制循环未启动,则立即返回
+   * @brief 等待控制循环线程结束；如果控制循环未启动，则立即返回
    */
   void Join();
 
@@ -292,7 +292,7 @@ class modi_bus_canevo {
  * ============================================================
  *
  * 代表总线上的一个关节节点 (node_id)，职责：
- *   - PDO 实时控制（非阻塞）：发送 RxPDO0~3，读取 TxPDO0 状态
+ *   - PDO 实时控制（非阻塞）：发送 RxPDO0~2，读取 TxPDO0 状态
  *   - SDO 配置/诊断（阻塞）：读写对象字典
  *   - 控制辅助：使能、失能、清故障、切模式
  *
@@ -339,7 +339,7 @@ class modi_joint_canevo {
    * PDO 实时控制（非阻塞）
    * ============================================================
    *
-   * 所有 set*Target* 函数仅将帧入队（SPSC 无锁队列），
+   * 所有 RtSet*Target* 函数仅将帧入队（SPSC 无锁队列），
    * 由内部 Tx 线程异步执行 write()，不阻塞调用者。
    * controlword 由 SDK 内部缓存自动管理（通过 NrtEnable/NrtDisable
    * 等修改）。
@@ -374,20 +374,6 @@ class modi_joint_canevo {
   int RtSetCstTargetCurrent(const float target_cur_a);
 
   /**
-   * @brief PP 模式：发送轮廓位置目标 (RxPDO3, cob_id = 0x2C0 + node_id)
-   * [实时接口]
-   * @param target_pos_rad 目标位置 (rad)
-   * @param profile_vel_rads 轮廓速度 (rad/s)
-   * @param profile_acc_radss 轮廓加速度 (rad/s²)
-   * @param profile_dec_radss 轮廓减速度 (rad/s²)
-   * @return CanEvoError::kOk 成功
-   */
-  int RtSetPpTargetPosition(const float target_pos_rad,
-                            const float profile_vel_rads,
-                            const float profile_acc_radss,
-                            const float profile_dec_radss);
-
-  /**
    * @brief 获取最新关节状态（非阻塞，从 TxPDO0 缓存读取） [实时接口]
    * @param[out] out 输出状态结构体
    * @return CanEvoError::kOk 成功（有新数据），NotInitialized 未初始化
@@ -405,7 +391,7 @@ class modi_joint_canevo {
    * controlword 控制（非阻塞，修改内部缓存，下次 PDO 帧生效）
    * ============================================================ */
 
-  /* RtEnable 和 RtDisable 已被移除，请使用 NrtEnable/NrtDisable */
+  /** @note RtEnable/RtDisable 已移除，请使用 NrtEnable/NrtDisable。 */
 
   /**
    * @brief 清除故障（触发控制字 bit0 单周期脉冲） [实时接口]
@@ -435,11 +421,11 @@ class modi_joint_canevo {
    */
 
   /**
-   * @brief SDO 方式伺服使能并设置工作模式（设置控制字 bit1 = 1 和 bit12~bit15）
-   * [非实时接口]
+   * @brief SDO 方式伺服使能并设置工作模式（设置控制字 bit1 = 1 和
+   * bit12~bit15）[非实时接口]
    * @param mode 目标工作模式
-   * @note 通过 SDO 修改控制字 bit1=1 和
-   * bit12-15，操作完成后控制字立即生效，无需等待 PDO 发送
+   * @note 通过 SDO 修改控制字 bit1=1 和 bit12~bit15，操作完成后立即生效，
+   * 无需等待 PDO 发送
    * @return CanEvoError::kOk 成功
    */
   int NrtEnable(const CanEvoMode mode);
@@ -447,16 +433,15 @@ class modi_joint_canevo {
   /**
    * @brief SDO 方式伺服失能（先切换到 CSP 模式，再设置控制字 bit1 = 0）
    * [非实时接口]
-   * @note 通过 SDO 修改控制字，先设置模式为
-   * CSP（bit12~bit15），再失能（bit1=0） 操作完成后控制字立即生效，无需等待 PDO
-   * 发送
+   * @note 通过 SDO 修改控制字：先设置模式为 CSP（bit12~bit15），再失能
+   * （bit1=0）；操作完成后立即生效，无需等待 PDO 发送
    * @return CanEvoError::kOk 成功
    */
   int NrtDisable();
 
   /**
    * @brief SDO 方式清除故障（触发控制字 bit0 单周期脉冲） [非实时接口]
-   * @note 通过 SDO 发送单周期脉冲(bit0=1然后自动清0)，仅在故障状态时有效
+   * @note 通过 SDO 发送单周期脉冲（bit0=1 后自动清 0），仅在故障状态时有效
    * @return CanEvoError::kOk 成功
    */
   int NrtClearFault();
@@ -707,7 +692,7 @@ class modi_joint_canevo {
   /**
    * @brief 获取伺服状态机状态 [实时接口]
    * @return CanEvoServoState 枚举
-      */
+   */
   CanEvoServoState RtGetServoState();
 
   /**

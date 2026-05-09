@@ -283,7 +283,8 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 | 6 | `RtSetCspTargetPosition(target_pos_rad)` | `target_pos_rad`: 目标位置（const float），单位：rad | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | CSP 模式：发送目标位置（RxPDO0，cob_id = 0x200 + node_id） [实时接口] |
 | 7 | `RtSetCsvTargetVelocity(target_vel_rads)` | `target_vel_rads`: 目标速度（const float），单位：rad/s | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | CSV 模式：发送目标速度（RxPDO1，cob_id = 0x240 + node_id） [实时接口] |
 | 8 | `RtSetCstTargetCurrent(target_cur_a)` | `target_cur_a`: 目标转矩电流（const float），单位：A | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | CST 模式：发送目标转矩电流（RxPDO2，cob_id = 0x280 + node_id） [实时接口] |
-| 9 | `RtSetPpTargetPosition(target_pos_rad, profile_vel_rads, profile_acc_radss, profile_dec_radss)` | `target_pos_rad`: 目标位置（const float），单位：rad<br>`profile_vel_rads`: 轮廓速度（const float），单位：rad/s<br>`profile_acc_radss`: 轮廓加速度（const float），单位：rad/s²<br>`profile_dec_radss`: 轮廓减速度（const float），单位：rad/s² | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | PP 模式：发送轮廓位置目标（RxPDO3，cob_id = 0x2C0 + node_id） [实时接口] |
+
+> 注：PP 模式不再提供 PDO 实时接口，统一通过 SDO 一次性下发轮廓参数，详见 `NrtSetPpTargetPosition`（5.x 节）。
 
 ### 5.3 状态读取（非阻塞）
 

@@ -128,17 +128,6 @@ int modi_joint_canevo::RtSetCstTargetCurrent(const float target_cur_a) {
   return impl_->SendRxPdo2(target_cur_a);
 }
 
-int modi_joint_canevo::RtSetPpTargetPosition(const float target_pos_rad,
-                                             const float profile_vel_rads,
-                                             const float profile_acc_radss,
-                                             const float profile_dec_radss) {
-  if (!impl_->isInitialized())
-    return static_cast<int>(CanEvoError::kNotInitialized);
-  return impl_->SendRxPdo3(
-      target_pos_rad * kRadToDeg, profile_vel_rads * kRadsToRpm,
-      profile_acc_radss * kRadsToRpm, profile_dec_radss * kRadsToRpm);
-}
-
 int modi_joint_canevo::RtGetJointStatus(JointStatus& out) {
   if (!impl_->isInitialized())
     return static_cast<int>(CanEvoError::kNotInitialized);

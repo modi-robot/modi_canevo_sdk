@@ -3,6 +3,9 @@ project(canevo_sdk_x86 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+include(CMakePackageConfigHelpers)
+set(CANEVO_SDK_VERSION "0.1.0")
+set(CANEVO_EXAMPLE_SOURCE_BUILD OFF CACHE BOOL "Build examples with source target instead of find_package")
 
 # 设置安装路径为 build/install（如果未指定）
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT OR CMAKE_INSTALL_PREFIX STREQUAL "/usr/local")
@@ -25,6 +28,11 @@ target_link_libraries(canevo_sdk_x86
     PRIVATE pthread
 )
 
+# Make the SDK .so prefer packaged C++ runtime libs.
+set_target_properties(canevo_sdk_x86 PROPERTIES
+    INSTALL_RPATH "\$ORIGIN/runtime"
+)
+
 # ---- 示例 ----
 add_subdirectory(example)
 
@@ -38,9 +46,90 @@ install(TARGETS canevo_sdk_x86
 )
 
 install(FILES include/modi_joint_canevo.h DESTINATION include)
+install(DIRECTORY docs/ DESTINATION docs)
+
+execute_process(
+    COMMAND "${CMAKE_CXX_COMPILER}" -print-file-name=libstdc++.so.6
+    OUTPUT_VARIABLE CANEVO_LIBSTDCXX_PATH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+execute_process(
+    COMMAND "${CMAKE_CXX_COMPILER}" -print-file-name=libgcc_s.so.1
+    OUTPUT_VARIABLE CANEVO_LIBGCC_PATH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+foreach(_runtime_lib IN ITEMS "${CANEVO_LIBSTDCXX_PATH}" "${CANEVO_LIBGCC_PATH}")
+  if(NOT _runtime_lib OR _runtime_lib STREQUAL "libstdc++.so.6" OR _runtime_lib STREQUAL "libgcc_s.so.1" OR NOT EXISTS "${_runtime_lib}")
+    message(FATAL_ERROR "Failed to locate runtime library: ${_runtime_lib}")
+  endif()
+endforeach()
+
+get_filename_component(CANEVO_LIBSTDCXX_REALPATH "${CANEVO_LIBSTDCXX_PATH}" REALPATH)
+get_filename_component(CANEVO_LIBGCC_REALPATH "${CANEVO_LIBGCC_PATH}" REALPATH)
+
+install(FILES
+    "${CANEVO_LIBSTDCXX_REALPATH}"
+    DESTINATION lib/runtime
+    RENAME libstdc++.so.6
+)
+install(FILES
+    "${CANEVO_LIBGCC_REALPATH}"
+    DESTINATION lib/runtime
+    RENAME libgcc_s.so.1
+)
+
+install(FILES
+    example/CMakeLists.txt
+    DESTINATION example
+)
+install(FILES
+    example/01_bus_open_close.cpp
+    example/02_test_sdo.cpp
+    example/03_csv_test.cpp
+    example/04_pp_test.cpp
+    example/05_csp_test.cpp
+    example/06_test.cpp
+    DESTINATION example
+)
 
 install(EXPORT canevo_sdk_x86Targets
     FILE canevo_sdk_x86Targets.cmake
     NAMESPACE canevo_sdk_x86::
     DESTINATION lib/cmake/canevo_sdk_x86
 )
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/canevo_sdk_x86Config.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/canevo_sdk_x86Config.cmake"
+    INSTALL_DESTINATION lib/cmake/canevo_sdk_x86
+)
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/canevo_sdk_x86ConfigVersion.cmake"
+    VERSION "${CANEVO_SDK_VERSION}"
+    COMPATIBILITY SameMajorVersion
+)
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/canevo_sdk_x86Config.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/canevo_sdk_x86ConfigVersion.cmake"
+    DESTINATION lib/cmake/canevo_sdk_x86
+)
+
+# ---- 打包（生成 make package 目标）----
+set(CPACK_PACKAGE_NAME "${PROJECT_NAME}")
+set(CPACK_PACKAGE_VERSION "${CANEVO_SDK_VERSION}")
+set(CPACK_PACKAGE_VENDOR "modi")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "canevo sdk for x86")
+set(CPACK_GENERATOR "ZIP")
+execute_process(
+  COMMAND git rev-parse --short=8 HEAD
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  OUTPUT_VARIABLE GIT_COMMIT_SHORT
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_QUIET
+)
+if(NOT GIT_COMMIT_SHORT)
+  set(GIT_COMMIT_SHORT "nogit")
+endif()
+set(CPACK_PACKAGE_FILE_NAME "canevo_sdk-${CPACK_PACKAGE_VERSION}-${GIT_COMMIT_SHORT}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
+include(CPack)
