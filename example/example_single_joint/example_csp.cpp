@@ -18,10 +18,26 @@
 #include <chrono>
 #include <cmath>
 #include <csignal>
+#include <ctime>
+#include <iomanip>
 #include <iostream>
 #include <thread>
 
 #include "modi_joint_canevo.h"
+
+#ifndef CANEVO_HAVE_NECRO
+#define CANEVO_HAVE_NECRO 0
+#endif
+
+#if CANEVO_HAVE_NECRO
+#include <qiuniu/init.h>
+#include <qiuniu/wrappers.h>
+#else
+#ifndef __RT
+#define __RT(expr) (expr)
+#endif
+inline void qiuniu_init() {}
+#endif
 
 constexpr float kDegToRad = static_cast<float>(M_PI) / 180.0f;
 constexpr float kCspStepRad = 0.05f * kDegToRad;
@@ -50,7 +66,7 @@ timespec AddNs(timespec current, long ns) {
 
 void* RtLoop(void*) {
   timespec next_wakeup{};
-  clock_gettime(CLOCK_MONOTONIC, &next_wakeup);
+  __RT(clock_gettime(CLOCK_MONOTONIC, &next_wakeup));
 
   const long period_ns = g_period_us * 1000L;
   float target_pos_rad = 0.0f;
@@ -60,7 +76,13 @@ void* RtLoop(void*) {
 
   while (!g_rt_exit.load(std::memory_order_acquire)) {
     next_wakeup = AddNs(next_wakeup, period_ns);
-    clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, nullptr);
+    const int sleep_ret =
+        __RT(clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup,
+                             nullptr));
+    if (sleep_ret != 0) {
+      g_rt_ret.store(sleep_ret, std::memory_order_release);
+      break;
+    }
 
     const int ret = g_bus->RtStepOnce();
     if (ret != static_cast<int>(CanEvoError::kOk)) {
@@ -121,6 +143,15 @@ void PrintJointDiag(modi_joint_canevo& joint) {
             << static_cast<uint16_t>(warn) << std::dec << std::endl;
 }
 
+void PrintEndTime() {
+  const auto now = std::chrono::system_clock::now();
+  const std::time_t now_time = std::chrono::system_clock::to_time_t(now);
+  std::tm local_time{};
+  localtime_r(&now_time, &local_time);
+  std::cout << "结束时间: " << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S")
+            << std::endl;
+}
+
 bool WaitServoState(modi_joint_canevo& joint, CanEvoServoState target,
                     const char* action) {
   // 等待3s
@@ -158,6 +189,10 @@ int main() {
   std::cout << "========================================" << std::endl;
   std::cout << "CSP 测试程序 - 从当前位置开始每周期步进 0.1deg" << std::endl;
   std::cout << "========================================" << std::endl;
+  qiuniu_init();
+  std::cout << "NIIC hard realtime: "
+            << (CANEVO_HAVE_NECRO ? "ON (__RT -> qiuniu)" : "OFF (POSIX)")
+            << std::endl;
 
   // 1. 禁止内存交换
   if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
@@ -195,10 +230,10 @@ int main() {
     return -1;
   }
 
-  // 5. 设置CPU亲和性，把实时线程绑定在隔离内核，我这里隔离的是2号CPU
+  // 5. 设置CPU亲和性，把实时线程绑定在隔离内核；当前启动参数隔离的是 CPU1
   cpu_set_t cpuset;
   CPU_ZERO(&cpuset);
-  int cpu = 2;
+  int cpu = 1;
   CPU_SET(cpu, &cpuset);
   attr_ret = pthread_attr_setaffinity_np(&attr, sizeof(cpuset), &cpuset);
   if (attr_ret != 0) {
@@ -206,6 +241,7 @@ int main() {
               << std::endl;
     return -1;
   }
+  std::cout << "✓ 实时线程绑定 CPU" << cpu << std::endl;
 
   // 6. 配置SDK内部状态更新线程
   TaskConfig task_config;
@@ -215,6 +251,8 @@ int main() {
   task_config.sched_policy = sched_policy;
   // 如果与实时线程绑在同一个CPU上，优先级建议比实时线程底一些，防止与实时线程发生竞争
   task_config.sched_priority = 90;
+  std::cout << "✓ SDK Rx 线程绑定 CPU" << task_config.cpu_affinity
+            << ", 优先级 " << task_config.sched_priority << std::endl;
 
   // 7. 创建总线和关节对象
   modi_bus_canevo bus;
@@ -302,7 +340,11 @@ int main() {
 
   // 14. CSP Running 后再创建实时线程；电机会从当前位置开始步进
   pthread_t rt_thread{};
-  const int create_ret = pthread_create(&rt_thread, &attr, RtLoop, nullptr);
+  const int create_ret =
+      __RT(pthread_create(&rt_thread, &attr, RtLoop, nullptr));
+  if (create_ret == 0) {
+    __RT(pthread_setname_np(rt_thread, "canevo_csp_rt"));
+  }
   pthread_attr_destroy(&attr);
   if (create_ret != 0) {
     std::cerr << "✗ 创建实时线程失败, errno=" << create_ret << std::endl;
@@ -316,7 +358,8 @@ int main() {
   std::cout << "CSP 步进轨迹运行中：每周期 +0.1 deg，按 Ctrl+C 终止... "
             << std::endl;
 
-  pthread_join(rt_thread, nullptr);
+  __RT(pthread_join(rt_thread, nullptr));
+  PrintEndTime();
 
   const int rt_ret = g_rt_ret.load(std::memory_order_acquire);
   if (rt_ret != static_cast<int>(CanEvoError::kOk)) {

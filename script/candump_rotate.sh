@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 LOG_DIR="$REPO_ROOT/build/logs"
 KEEP=20
-SIZE="10M"
+SIZE="20M"
 CAN_IF="${1:-can0}"
 CLEAN_PID=""
 

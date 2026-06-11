@@ -44,7 +44,10 @@ install(TARGETS canevo_sdk_x86
     INCLUDES DESTINATION include
 )
 
-install(FILES include/modi_joint_canevo.h DESTINATION include)
+install(FILES
+    include/modi_joint_canevo.h
+    DESTINATION include
+)
 install(DIRECTORY docs/ DESTINATION docs)
 
 execute_process(
@@ -86,7 +89,9 @@ install(DIRECTORY
     example/example_single_joint
     example/example_multi_joints
     DESTINATION example
-    FILES_MATCHING PATTERN "*.cpp"
+    FILES_MATCHING
+      PATTERN "*.cpp"
+      PATTERN "*.hpp"
 )
 
 install(EXPORT canevo_sdk_x86Targets
