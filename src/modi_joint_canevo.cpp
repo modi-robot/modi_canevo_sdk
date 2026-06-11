@@ -2,7 +2,7 @@
  * @file    modi_joint_canevo.cpp
  * @brief   公开类 modi_bus_canevo / modi_joint_canevo 实现（PIMPL 转发层）
  *
- * @protocol CanEvo V1.2.3
+ * @protocol CanEvo V1.2.4
  * @version  1.0
  * @date     2026-02-26
  */
@@ -42,8 +42,8 @@ int modi_bus_canevo::Open(const std::string& can_ifname,
 }
 void modi_bus_canevo::Close() { impl_->Close(); }
 bool modi_bus_canevo::IsOpen() const { return impl_->IsOpen(); }
-int modi_bus_canevo::RtSendSync(const uint8_t counter) {
-  return impl_->SendSync(counter);
+std::vector<uint8_t> modi_bus_canevo::NrtScanJoints() {
+  return impl_->ScanJoints();
 }
 void modi_bus_canevo::SetSdoTimeoutMs(const int ms) {
   impl_->SetDefaultSdoTimeoutMs(ms);
@@ -52,11 +52,7 @@ void modi_bus_canevo::SetPdoTimeoutMs(const int ms) {
   impl_->SetDefaultPdoTimeoutMs(ms);
 }
 
-int modi_bus_canevo::StartControlLoop(ControlLoopCallback callback) {
-  return impl_->StartControlLoop(callback);
-}
-
-void modi_bus_canevo::Join() { impl_->Join(); }
+int modi_bus_canevo::RtStepOnce() { return impl_->RtStepOnce(); }
 
 /* ============================================================
  *            modi_joint_canevo
@@ -71,25 +67,15 @@ int modi_joint_canevo::NrtInit(modi_bus_canevo& bus, const uint8_t node_id) {
   if (!bus.IsOpen()) return static_cast<int>(CanEvoError::kBusNotOpen);
   if (node_id == 0 || node_id > 62)
     return static_cast<int>(CanEvoError::kInvalidParam);
-  if (impl_->isInitialized()) NrtDestroy();  // 已初始化则先释放 
-  
-  
-  // 发布90个同步帧,后续可能需要删除掉
-  //uint8_t sync = 0;
-  //for (int i = 0; i < 90; i++) {
-   // bus.RtSendSync(sync++);
-    //joint.RtSetCspTargetPosition(current_pos_rad);
-    //std::this_thread::sleep_for(std::chrono::milliseconds(PERIOD_MS));
-  //}
-
+  if (impl_->isInitialized()) NrtDestroy();  // 已初始化则先释放
   int ret = impl_->Init(bus.impl_.get(), node_id);
   if (ret == static_cast<int>(CanEvoError::kOk)) {
     // 注册到总线
     bus.impl_->RegisterJoint(node_id, impl_.get());
 
-    // 自动设置同步周期（与控制循环周期一致）
+    // 自动设置同步周期（sync_period_us）
     uint16_t sync_period_us =
-        static_cast<uint16_t>(bus.impl_->GetTaskConfig().period_us);
+        static_cast<uint16_t>(bus.impl_->GetTaskConfig().sync_period_us);
     int sync_ret = impl_->SetSyncPeriod(sync_period_us);
     if (sync_ret != static_cast<int>(CanEvoError::kOk)) {
       std::cerr << "警告: 无法设置关节同步周期 (node_id=" << (int)node_id
@@ -101,10 +87,6 @@ int modi_joint_canevo::NrtInit(modi_bus_canevo& bus, const uint8_t node_id) {
 }
 
 void modi_joint_canevo::NrtDestroy() { impl_->Shutdown(); }
-
-uint8_t modi_joint_canevo::NrtNodeId() const {
-  return impl_->isInitialized() ? impl_->nodeId() : 0;
-}
 
 /* ============================================================
  * PDO 实时控制（非阻塞）
@@ -128,6 +110,36 @@ int modi_joint_canevo::RtSetCstTargetCurrent(const float target_cur_a) {
   return impl_->SendRxPdo2(target_cur_a);
 }
 
+int modi_joint_canevo::NrtSetPvTargetVelocity(const float target_vel,
+                                              const float acc) {
+  if (!impl_->isInitialized())
+    return static_cast<int>(CanEvoError::kNotInitialized);
+  int ret = impl_->sdoWriteF32(0x21, 0x03, target_vel * kRadsToRpm);
+  if (ret != 0) return ret;
+  ret = impl_->sdoWriteF32(0x21, 0x08, acc * kRadsToRpm);
+  if (ret != 0) return ret;
+  return impl_->sdoWriteF32(0x21, 0x09, acc * kRadsToRpm);
+}
+
+int modi_joint_canevo::NrtSetPtTargetCurrent(const float target_cur_a,
+                                             const float current_slope_as) {
+  if (!impl_->isInitialized())
+    return static_cast<int>(CanEvoError::kNotInitialized);
+  int ret = impl_->sdoWriteF32(0x21, 0x04, target_cur_a);
+  if (ret != 0) return ret;
+  return impl_->sdoWriteF32(0x21, 0x06, current_slope_as);
+}
+
+int modi_joint_canevo::RtSetMitTarget(const float target_pos_rad,
+                                      const float target_vel_rads,
+                                      const float target_torque_nm,
+                                      const float kp, const float kd) {
+  if (!impl_->isInitialized())
+    return static_cast<int>(CanEvoError::kNotInitialized);
+  return impl_->SendRxPdo6(target_pos_rad, target_vel_rads, target_torque_nm, kp,
+                           kd);
+}
+
 int modi_joint_canevo::RtGetJointStatus(JointStatus& out) {
   if (!impl_->isInitialized())
     return static_cast<int>(CanEvoError::kNotInitialized);
@@ -145,14 +157,6 @@ bool modi_joint_canevo::RtGetEmcy(CanEvoFault& out_fault) {
 /* ============================================================
  * controlword 控制（非阻塞，修改内部缓存）
  * ============================================================ */
-
-
-int modi_joint_canevo::RtClearFault() {
-  if (!impl_->isInitialized())
-    return static_cast<int>(CanEvoError::kNotInitialized);
-  impl_->TriggerFaultClr();
-  return static_cast<int>(CanEvoError::kOk);
-}
 
 int modi_joint_canevo::RtEstop() {
   if (!impl_->isInitialized())
@@ -182,16 +186,14 @@ int modi_joint_canevo::NrtEnable(const CanEvoMode mode) {
   // bit12~bit15 为模式位，清除后设置新值
   cw = static_cast<uint16_t>((cw & ~0xF000) |
                              (static_cast<uint16_t>(mode) << 12));
-  // bit1 = 1 (使能)
-  cw = static_cast<uint16_t>((cw & ~0x0002) | 0x0002);
-  
+  cw = static_cast<uint16_t>(cw | 0x0002);  // bit1 = 1
+
   ret = impl_->sdoWriteU16(0x21, 0x00, cw);  // 先写硬件
   if (ret != 0) return ret;
-  
-  // ★★★ 调用已有的方法更新缓存 ★★★
-  impl_->SetMode(mode);      // 设置模式
-  impl_->SetEnable(true);    // 设置使能
-  
+
+  impl_->SetMode(mode);    // 设置模式
+  impl_->SetEnable(true);  // 设置使能
+
   return static_cast<int>(CanEvoError::kOk);
 }
 
@@ -201,18 +203,13 @@ int modi_joint_canevo::NrtDisable() {
   uint16_t cw = 0;
   int ret = impl_->sdoReadU16(0x21, 0x00, cw);
   if (ret != 0) return ret;
-  // 先切换到 CSP 模式（bit12~bit15），再失能（bit1 = 0）
-  cw = static_cast<uint16_t>((cw & ~0xF000) |
-                             (static_cast<uint16_t>(CanEvoMode::kCsp) << 12));
   cw = static_cast<uint16_t>(cw & ~0x0002);  // bit1 = 0
-  
+
   ret = impl_->sdoWriteU16(0x21, 0x00, cw);  // 先写硬件
   if (ret != 0) return ret;
-  
-  // ★★★ 调用已有的方法更新缓存 ★★★
-  impl_->SetMode(CanEvoMode::kCsp);  // 设置模式为 CSP
-  impl_->SetEnable(false);            // 失能
-  
+
+  impl_->SetEnable(false);  // 失能
+
   return static_cast<int>(CanEvoError::kOk);
 }
 
@@ -478,17 +475,23 @@ uint32_t modi_joint_canevo::NrtGetOutputEncRes() {
  * SDO 命名化接口 — PP 模式轮廓参数 (Index 0x21)
  * ============================================================ */
 
-int modi_joint_canevo::NrtSetPpTargetPosition(const float target_pos_rad,
-                                              const float profile_vel_rads,
-                                              const float profile_acc_radss,
-                                              const float profile_dec_radss) {
-  int ret = impl_->sdoWriteF32(0x21, 0x02, target_pos_rad * kRadToDeg);
+int modi_joint_canevo::NrtSetPpTargetPosition(const float target_pos,
+                                              const float vel,
+                                              const float acc) {
+  if (!impl_->isInitialized())
+    return static_cast<int>(CanEvoError::kNotInitialized);
+
+  if (NrtGetServoState() == CanEvoServoState::kRunning) {
+    return impl_->sdoWriteF32(0x21, 0x02, target_pos * kRadToDeg);
+  }
+
+  int ret = impl_->sdoWriteF32(0x21, 0x07, vel * kRadsToRpm);
   if (ret != 0) return ret;
-  ret = impl_->sdoWriteF32(0x21, 0x07, profile_vel_rads * kRadsToRpm);
+  ret = impl_->sdoWriteF32(0x21, 0x08, acc * kRadsToRpm);
   if (ret != 0) return ret;
-  ret = impl_->sdoWriteF32(0x21, 0x08, profile_acc_radss * kRadsToRpm);
+  ret = impl_->sdoWriteF32(0x21, 0x09, acc * kRadsToRpm);
   if (ret != 0) return ret;
-  return impl_->sdoWriteF32(0x21, 0x09, profile_dec_radss * kRadsToRpm);
+  return impl_->sdoWriteF32(0x21, 0x02, target_pos * kRadToDeg);
 }
 
 /* ============================================================
@@ -585,19 +588,6 @@ CanEvoMode modi_joint_canevo::RtGetCurrentMode() {
   if (!impl_->isInitialized()) return CanEvoMode::kCsp;
   uint16_t sw = impl_->GetStatusword();
   return static_cast<CanEvoMode>((sw & kSwModeMask) >> kSwModeShift);
-}
-
-bool modi_joint_canevo::RtIsRunning() {
-  if (!impl_->isInitialized()) return false;
-  uint16_t sw = impl_->GetStatusword();
-  return (sw & kSwStateMask) ==
-         static_cast<uint16_t>(CanEvoServoState::kRunning);
-}
-
-bool modi_joint_canevo::RtHasWarning() {
-  if (!impl_->isInitialized()) return false;
-  uint16_t sw = impl_->GetStatusword();
-  return (sw & kSwWarnBit) != 0;
 }
 
 CanEvoServoState modi_joint_canevo::NrtGetServoState() {

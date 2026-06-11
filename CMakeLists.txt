@@ -12,7 +12,6 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT OR CMAKE_INSTALL_PREFIX STREQUAL 
   set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/install" CACHE PATH "Install path prefix" FORCE)
 endif()
 
-# ---- 库 ----
 add_library(canevo_sdk_x86 SHARED
     src/canevo_impl.cpp
     src/modi_joint_canevo.cpp
@@ -83,14 +82,11 @@ install(FILES
     example/CMakeLists.txt
     DESTINATION example
 )
-install(FILES
-    example/01_bus_open_close.cpp
-    example/02_test_sdo.cpp
-    example/03_csv_test.cpp
-    example/04_pp_test.cpp
-    example/05_csp_test.cpp
-    example/06_test.cpp
+install(DIRECTORY
+    example/example_single_joint
+    example/example_multi_joints
     DESTINATION example
+    FILES_MATCHING PATTERN "*.cpp"
 )
 
 install(EXPORT canevo_sdk_x86Targets

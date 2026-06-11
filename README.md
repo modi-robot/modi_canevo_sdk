@@ -4,12 +4,12 @@ CanEvo CAN-FD 关节控制 C++ SDK，适用于 x86 (Linux/SocketCAN) 平台。
 
 ## 简介
 
-本 SDK 提供了基于 CanEvo V1.2.3 CAN-FD 协议的关节控制接口，支持在 Linux 平台上通过 SocketCAN 进行实时关节控制。
+本 SDK 提供了基于 CanEvo V1.2.4 CAN-FD 协议的关节控制接口，支持在 Linux 平台上通过 SocketCAN 进行实时关节控制。
 
 ### 主要特性
 
 - **Bus + Joint 两级架构**：支持同一总线上挂载多个关节节点
-- **实时控制**：PDO 接口采用 SPSC 无锁队列 + 专用 Tx 线程，保证非阻塞实时性
+- **实时控制**：ControlLoop 按 `SYNC -> 等 TxPDO -> callback -> 绝对时间睡眠` 时序运行，PDO 发送绕开 SDO 锁
 - **同步配置**：SDO 接口为同步阻塞调用，适合初始化/配置阶段
 - **PIMPL 设计**：隐藏实现细节，公开头文件无平台依赖
 - **单位自动转换**：SDK 内部自动完成 rad↔deg、rad/s↔rpm 等单位转换
@@ -20,6 +20,9 @@ CanEvo CAN-FD 关节控制 C++ SDK，适用于 x86 (Linux/SocketCAN) 平台。
 - **CSV (Cyclic Synchronous Velocity)**：周期同步速度模式
 - **CST (Cyclic Synchronous Torque)**：周期同步转矩模式
 - **PP (Profile Position)**：轮廓位置模式
+- **PV (Profile Velocity)**：轮廓速度模式
+- **PT (Profile Torque)**：轮廓转矩模式
+- **MIT**：混合控制模式
 
 ## 系统要求
 
@@ -61,24 +64,20 @@ int main() {
     joint.NrtInit(bus, 1);  // node_id = 1
     
     // 3. 设置工作模式并使能
-    joint.RtEnable(CanEvoMode::kCsp);
+    joint.NrtEnable(CanEvoMode::kCsp);
     
-    // 4. 实时控制循环
-    uint8_t sync_counter = 0;
-    while (running) {
-        // 发送 SYNC 帧
-        bus.RtSendSync(sync_counter++);
-        
+    // 4. 实时控制循环：StartControlLoop 内部自动发送 SYNC
+    bus.StartControlLoop([&]() {
         // 读取关节状态
         JointStatus status;
         joint.RtGetJointStatus(status);
         
         // 设置目标位置
         joint.RtSetCspTargetPosition(target_pos_rad);
-    }
+    });
     
     // 5. 清理资源
-    joint.RtDisable();
+    joint.NrtDisable();
     joint.NrtDestroy();
     bus.Close();
     
@@ -122,7 +121,7 @@ canevo_sdk_x86/
 ### 接口命名规范
 
 - **Rt 前缀**：Real-time（实时）接口，用于 PDO 相关操作，非阻塞，适合实时控制循环
-  - 例如：`RtSetCspTargetPosition()`、`RtGetJointStatus()`、`RtEnable()`
+  - 例如：`RtSetCspTargetPosition()`、`RtGetJointStatus()`
   
 - **Nrt 前缀**：Non-real-time（非实时）接口，用于 SDO 相关操作，阻塞调用，适合初始化/配置阶段
   - 例如：`NrtInit()`、`NrtDestroy()`、`NrtGetProtocolVersion()`
@@ -136,7 +135,7 @@ canevo_sdk_x86/
 主要接口：
 - `Open(can_ifname)`：打开 CAN 总线
 - `Close()`：关闭总线
-- `RtSendSync(counter)`：发送 SYNC 同步帧
+- `StartControlLoop(callback)`：启动控制线程，内部自动发送 SYNC 同步帧
 
 #### `modi_joint_canevo`
 
@@ -144,7 +143,7 @@ canevo_sdk_x86/
 
 主要接口：
 - **生命周期**：`NrtInit()`、`NrtDestroy()`
-- **实时控制**：`RtSetCspTargetPosition()`、`RtGetJointStatus()`、`RtEnable()`、`RtDisable()`
+- **实时控制**：`RtSetCspTargetPosition()`、`RtGetJointStatus()`、`RtEstop()`
 - **SDO 配置**：`NrtGetProtocolVersion()`、`NrtSetMaxSpeed()` 等
 
 ## 单位约定

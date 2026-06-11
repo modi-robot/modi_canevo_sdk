@@ -10,7 +10,7 @@
  *
  * 设计要点：
  *   - Bus + Joint 两级架构，同一总线上可挂多个关节
- *   - PDO 接口保证非阻塞实时性（SPSC 无锁队列 + 专用 Tx 线程）
+ *   - PDO 实时发送由用户外部实时线程调用 RtStepOnce() 主动推进
  *   - SDO 接口为同步阻塞调用（内部串行，自动等待应答）
  *   - PIMPL 隐藏实现细节，公开头文件无平台依赖
  *
@@ -27,15 +27,19 @@
  *   j1.NrtEnable(CanEvoMode::kCsp);
  *   j2.NrtEnable(CanEvoMode::kCsp);
  *
+ *   // 预填第一帧目标，下一次 SYNC 后生效
+ *   j1.RtSetCspTargetPosition(pos1_rad);
+ *   j2.RtSetCspTargetPosition(pos2_rad);
+ *
  *   // 实时控制循环
- *   uint8_t cnt = 0;
  *   while (running) {
- *       bus.RtSendSync(cnt++);
+ *       bus.RtStepOnce();  // SYNC + 等待 TxPDO
  *
  *       JointStatus st;
  *       j1.RtGetJointStatus(st);
  *       // ...
  *
+ *       // 发送下一周期目标
  *       j1.RtSetCspTargetPosition(pos1_rad);
  *       j2.RtSetCspTargetPosition(pos2_rad);
  *   }
@@ -49,7 +53,7 @@
  *   bus.Close();
  * @endcode
  *
- * @protocol CanEvo V1.2.3
+ * @protocol CanEvo V1.2.4
  * @version  1.0
  * @date     2026-02-26
  */
@@ -62,6 +66,8 @@
 #include <string>
 #include <vector>
 
+#include <sched.h>
+
 /* ============================================================
  * 错误码
  * ============================================================ */
@@ -73,9 +79,10 @@ enum class CanEvoError : int {
   kSendFailed = -3,   /**< CAN 发送失败 */
   kSdoTimeout = -4,   /**< SDO 应答超时 */
   kSdoAbort = -5,     /**< SDO 应答式故障（从站返回错误） */
-  kNotInitialized = -6, /**< Joint 未初始化 */
-  kNodeNotFound = -7,   /**< 节点未注册 */
-  kQueueFull = -8,      /**< 发送队列满 */
+  kNotInitialized = -6,       /**< Joint 未初始化 */
+  kNodeNotFound = -7,         /**< 节点未注册 */
+  kQueueFull = -8,            /**< 发送队列满 */
+  kRealtimeConfigFailed = -9, /**< 实时调度/亲和性/内存锁定配置失败 */
 };
 
 /* ============================================================
@@ -87,6 +94,9 @@ enum class CanEvoMode : uint8_t {
   kCsv = 2, /**< 周期同步速度 (Cyclic Synchronous Velocity) */
   kCst = 3, /**< 周期同步转矩 (Cyclic Synchronous Torque) */
   kPp = 4,  /**< 轮廓位置 (Profile Position) */
+  kPv = 5,  /**< 轮廓速度 (Profile Velocity) */
+  kPt = 6,  /**< 轮廓转矩 (Profile Torque) */
+  kMit = 7, /**< MIT 控制模式 */
 };
 
 /* ============================================================
@@ -168,19 +178,20 @@ constexpr uint16_t kCanevoBrakeClose = 0xBB66;
 
 struct JointStatus {
   uint16_t statusword = 0;
-  float actual_pos_rad = 0.0f;   /**< 实际位置 (rad) */
-  float actual_vel_rads = 0.0f;  /**< 实际速度 (rad/s) */
-  float actual_cur_a = 0.0f;     /**< 实际转矩电流 (A) */
-  float actual_acc_radss = 0.0f; /**< 实际加速度 (rad/s²) */
-  float bus_voltage_v = 0.0f; /**< 母线电压 (V) — 由 raw*0.01 转换 */
-  float pcb_temp_c = 0.0f;    /**< PCB温度 (℃) — 由 raw*0.1 转换 */
-  float motor_temp_c = 0.0f;  /**< 电机温度 (℃) — 由 raw*0.1 转换 */
+  float actual_pos = 0.0f;  /**< 实际位置 (rad) */
+  float actual_vel = 0.0f;  /**< 实际速度 (rad/s) */
+  float actual_cur = 0.0f;  /**< 实际转矩电流 (A) */
+  float actual_acc = 0.0f;  /**< 实际加速度 (rad/s²) */
+  float bus_voltage = 0.0f; /**< 母线电压 (V) — 由 raw*0.01 转换 */
+  float pcb_temp = 0.0f;    /**< PCB温度 (℃) — 由 raw*0.1 转换 */
+  float motor_temp = 0.0f;  /**< 电机温度 (℃) — 由 raw*0.1 转换 */
 };
 
 struct TaskConfig {
-  int period_us = 5000; /**< 控制周期 (us, 微秒) */
-  int priority = 90;    /**< 实时优先级 */
-  int cpu_affinity = 2; /**< CPU 亲和性（绑定到哪个核心） */
+  int sync_period_us = 5000; /**< 同步周期 (us, 微秒)，NrtInit 时写入从站 */
+  int cpu_affinity = 2; /**< Rx 线程 CPU 亲和性（绑定到哪个核心） */
+  int sched_policy = SCHED_FIFO; /**< Rx 线程调度策略，默认 SCHED_FIFO */
+  int sched_priority = 90;       /**< Rx 线程调度优先级 */
 };
 
 /* ============================================================
@@ -188,17 +199,6 @@ struct TaskConfig {
  * ============================================================ */
 
 class modi_joint_canevo;
-/**
- * @brief 控制循环回调函数类型
- *
- * 用户实现此函数，在每个控制周期被调用一次。
- * 典型使用：读取关节状态、计算控制量、发送控制命令。
- *
- * @note 建议使用 Lambda 捕获关节对象和状态变量
- * @note 示例：auto callback = [&joint]() { joint.RtSetCspTargetPosition(...);
- * };
- */
-using ControlLoopCallback = std::function<void()>;
 
 /* ============================================================
  * modi_bus_canevo — 总线管理
@@ -207,7 +207,7 @@ using ControlLoopCallback = std::function<void()>;
  * 代表一条 SocketCAN 总线（如 can0），职责：
  *   - 管理 SocketCAN socket 生命周期
  *   - 收包线程：持续接收帧并按 cob_id 分发到对应 Joint
- *   - 发包：SYNC 广播、PDO 发送队列
+ *   - 发包：SYNC 广播、实时 PDO 发送
  *   - 多个 Joint 共享同一个 Bus 实例
  */
 
@@ -224,20 +224,24 @@ class modi_bus_canevo {
   modi_bus_canevo& operator=(const modi_bus_canevo&) = delete;
 
   /**
-   * @brief 打开 SocketCAN 总线并配置任务参数
+   * @brief 打开已配置好的 SocketCAN CAN-FD 总线和任务参数
    * @param can_ifname SocketCAN 接口名，例如 "can0"
    * @param task_config
-   * 任务配置（控制周期 us、优先级、CPU 亲和性），使用默认值则为
-   * 5000 us（5 ms）、优先级 90、CPU 2
+   * 任务配置（同步周期 us、Rx 线程 CPU 亲和性），使用默认值则为
+   * 5000 us（5 ms）、CPU 2；Rx 线程实时优先级由 SDK 内部尽力配置
    * @return CanEvoError::kOk 成功，其他为失败
-   * @note 配置会应用于 Rx 线程和控制循环线程
+   * @note Open 不配置或拉起 CAN 接口；调用前请在外部手动执行
+   * `ip link set can0 type can bitrate 1000000 dbitrate 5000000 fd on`
+   * 和 `ip link set can0 up`
+   * @note SDK 不创建控制循环线程；用户外部实时线程自行调度 RtStepOnce()
+   * @note 如果当前进程缺少实时调度权限，Rx 线程会以普通调度继续运行
    */
   int Open(const std::string& can_ifname,
            const TaskConfig& task_config = TaskConfig());
 
   /**
    * @brief 关闭总线，释放所有资源
-   * @note 会自动停止控制循环线程和 Rx 线程
+   * @note 会自动停止 Rx 线程
    */
   void Close();
 
@@ -247,15 +251,11 @@ class modi_bus_canevo {
   bool IsOpen() const;
 
   /**
-   * @brief 发送 SYNC 广播帧 (cob_id = 0x03F) [实时接口]
-   *
-   * 每个控制周期调用一次，counter 0~255 循环递增。
-   * SYNC 使用独立 socket fd 发送，避免与 PDO 争抢锁。
-   *
-   * @param counter 同步计数器 (0~255)
-   * @return CanEvoError::kOk 成功
+   * @brief 扫描当前总线上在线的关节 CAN ID [非实时接口]
+   * @return 在线关节的实际 CAN ID 列表，按 ID 从小到大排列
+   * @note 通过 1~62 逐个读取 0x00/0x0C 实现；每个候选 ID 最多等待 50 ms
    */
-  int RtSendSync(const uint8_t counter);
+  std::vector<uint8_t> NrtScanJoints();
 
   /**
    * @brief 设置 SDO 默认超时（作为后续创建 joint 的默认值）
@@ -270,16 +270,11 @@ class modi_bus_canevo {
   void SetPdoTimeoutMs(const int ms);
 
   /**
-   * @brief 启动实时控制循环线程
-   * @param callback 每个控制周期调用的回调函数
+   * @brief 执行一次实时总线步进：发送 SYNC [实时接口]
    * @return CanEvoError::kOk 成功，其他为失败
+   * @note TxPDO 由 Open() 后启动的 Rx 线程异步接收并更新缓存；本接口不等待 TxPDO
    */
-  int StartControlLoop(ControlLoopCallback callback);
-
-  /**
-   * @brief 等待控制循环线程结束；如果控制循环未启动，则立即返回
-   */
-  void Join();
+  int RtStepOnce();
 
  private:
 
@@ -292,12 +287,12 @@ class modi_bus_canevo {
  * ============================================================
  *
  * 代表总线上的一个关节节点 (node_id)，职责：
- *   - PDO 实时控制（非阻塞）：发送 RxPDO0~2，读取 TxPDO0 状态
+ *   - PDO 实时控制（非阻塞）：发送 RxPDO，读取 TxPDO0 状态
  *   - SDO 配置/诊断（阻塞）：读写对象字典
  *   - 控制辅助：使能、失能、清故障、切模式
  *
  * 线程安全约定：
- *   - PDO 实时循环建议单线程调度（减少周期抖动）
+ *   - RtStepOnce 建议由用户外部实时线程单线程调度（减少周期抖动）
  *   - SDO 同一 Joint 不建议并发（SDK 内部 per-joint 串行）
  */
 
@@ -330,24 +325,19 @@ class modi_joint_canevo {
    */
   void NrtDestroy();
 
-  /**
-   * @brief 获取当前绑定的 node_id [非实时接口]
-   */
-  uint8_t NrtNodeId() const;
-
   /* ============================================================
    * PDO 实时控制（非阻塞）
    * ============================================================
    *
-   * 所有 RtSet*Target* 函数仅将帧入队（SPSC 无锁队列），
-   * 由内部 Tx 线程异步执行 write()，不阻塞调用者。
+   * 所有 RtSet*Target* 函数会立即发送对应 RxPDO。
    * controlword 由 SDK 内部缓存自动管理（通过 NrtEnable/NrtDisable
    * 等修改）。
    *
-   * 典型调用顺序：
-   *   1) bus.RtSendSync(counter)
-   *   2) joint.RtGetJointStatus(st)  — 读取最新缓存
-   *   3) joint.RtSetCspTargetPosition(pos_rad) 或其他模式
+   * 典型调用方式：
+   *   - 首次进入周期前可调用 RtSet*Target* 预填初始目标
+   *   - 周期开始调用 bus.RtStepOnce() 发送 SYNC 并等待 TxPDO
+   *   - 读取状态并计算下一周期目标
+   *   - 调用 RtSet*Target* 立即发送 RxPDO，供下一次 SYNC 生效
    */
 
   /**
@@ -374,6 +364,14 @@ class modi_joint_canevo {
   int RtSetCstTargetCurrent(const float target_cur_a);
 
   /**
+   * @brief MIT 模式：发送目标位置/速度/力矩和控制增益
+   * (RxPDO6, cob_id = 0x380 + node_id) [实时接口]
+   */
+  int RtSetMitTarget(const float target_pos_rad, const float target_vel_rads,
+                     const float target_torque_nm, const float kp,
+                     const float kd);
+
+  /**
    * @brief 获取最新关节状态（非阻塞，从 TxPDO0 缓存读取） [实时接口]
    * @param[out] out 输出状态结构体
    * @return CanEvoError::kOk 成功（有新数据），NotInitialized 未初始化
@@ -392,13 +390,6 @@ class modi_joint_canevo {
    * ============================================================ */
 
   /** @note RtEnable/RtDisable 已移除，请使用 NrtEnable/NrtDisable。 */
-
-  /**
-   * @brief 清除故障（触发控制字 bit0 单周期脉冲） [实时接口]
-   * @note 下次 PDO 发送时 bit0=1，之后自动清零
-   * @return CanEvoError::kOk 成功，NotInitialized 未初始化
-   */
-  int RtClearFault();
 
   /**
    * @brief 触发急停（设置控制字 bit2 = 1） [实时接口]
@@ -431,10 +422,9 @@ class modi_joint_canevo {
   int NrtEnable(const CanEvoMode mode);
 
   /**
-   * @brief SDO 方式伺服失能（先切换到 CSP 模式，再设置控制字 bit1 = 0）
+   * @brief SDO 方式伺服失能（设置控制字 bit1 = 0，不修改模式位）
    * [非实时接口]
-   * @note 通过 SDO 修改控制字：先设置模式为 CSP（bit12~bit15），再失能
-   * （bit1=0）；操作完成后立即生效，无需等待 PDO 发送
+   * @note 通过 SDO 修改控制字 bit1=0，操作完成后立即生效，无需等待 PDO 发送
    * @return CanEvoError::kOk 成功
    */
   int NrtDisable();
@@ -636,17 +626,28 @@ class modi_joint_canevo {
 
   /**
    * @brief 设置 PP 模式轮廓参数（一次性设置所有参数）[非实时接口]
-   * @param target_pos_rad 目标位置 (rad)
-   * @param profile_vel_rads 轮廓速度 (rad/s)
-   * @param profile_acc_radss 轮廓加速度 (rad/s²)
-   * @param profile_dec_radss 轮廓减速度 (rad/s²)
+   * @param target_pos 目标位置 (rad)
+   * @param vel 轮廓速度 (rad/s)
+   * @param acc 轮廓加速度/减速度 (rad/s²)
    * @return CanEvoError::kOk 成功
-   * @note 通过 SDO 写入 0x21/0x02, 0x21/0x07, 0x21/0x08, 0x21/0x09
+   * @note 通过 SDO 依次写入 0x21/0x07, 0x21/0x08, 0x21/0x09,
+   * 0x21/0x02
    */
-  int NrtSetPpTargetPosition(const float target_pos_rad,
-                             const float profile_vel_rads,
-                             const float profile_acc_radss,
-                             const float profile_dec_radss);
+  int NrtSetPpTargetPosition(const float target_pos, const float vel,
+                             const float acc);
+
+  /**
+   * @brief PV 模式：通过 SDO 设置目标速度和轮廓加减速度 [非实时接口]
+   * @note 写入 0x21/0x03, 0x21/0x08, 0x21/0x09
+   */
+  int NrtSetPvTargetVelocity(const float target_vel, const float acc);
+
+  /**
+   * @brief PT 模式：通过 SDO 设置目标转矩电流和电流斜率 [非实时接口]
+   * @note 写入 0x21/0x04, 0x21/0x06
+   */
+  int NrtSetPtTargetCurrent(const float target_cur_a,
+                            const float current_slope_as);
 
   /* ============================================================
    * SDO 命名化接口 — 实际量 (Index 0x20, 只读)
@@ -700,16 +701,6 @@ class modi_joint_canevo {
    * @return CanEvoMode 枚举
    */
   CanEvoMode RtGetCurrentMode();
-
-  /**
-   * @brief 检查是否处于运行状态（伺服使能） [实时接口]
-   */
-  bool RtIsRunning();
-
-  /**
-   * @brief 检查是否有警告 [实时接口]
-   */
-  bool RtHasWarning();
 
   /**
    * @brief 通过 SDO 获取伺服状态机状态 [非实时接口]

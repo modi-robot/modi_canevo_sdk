@@ -4,16 +4,18 @@
  *
  * @details
  * 直接定义 modi_bus_canevo::Impl 和 modi_joint_canevo::Impl（PIMPL 实现类），
- * 以及内部用到的 CAN 帧结构、SPSC 无锁队列、协议编解码辅助等。
+ * 以及内部用到的 CAN 帧结构、实时发送路径、协议编解码辅助等。
  *
  * @note 本文件仅供 SDK 内部 .cpp 使用，用户不应直接包含。
  *
- * @protocol CanEvo V1.2.3
+ * @protocol CanEvo V1.2.4
  * @version  1.0
  * @date     2026-02-26
  */
 
 #pragma once
+
+#include <pthread.h>
 
 #include <atomic>
 #include <condition_variable>
@@ -40,53 +42,6 @@ struct CanFrame {
   uint8_t is_fd = 1; /**< CAN-FD 标志 */
   uint8_t brs = 1;   /**< Bit Rate Switch */
   uint8_t data[64] = {};
-};
-
-/* ============================================================
- * SPSC 无锁环形队列（单生产者-单消费者）
- *
- * 用于控制线程 -> Tx线程的 PDO 帧传输。
- * Capacity 必须为 2 的幂。
- * ============================================================ */
-
-template <typename T, uint32_t Capacity>
-class SpscRingQueue {
- public:
-
-  bool push(const T& item) {
-    const uint32_t w = write_.load(std::memory_order_relaxed);
-    const uint32_t next = (w + 1) & kMask;
-    if (next == read_.load(std::memory_order_acquire)) {
-      return false;  // 满
-    }
-    buf_[w] = item;
-    write_.store(next, std::memory_order_release);
-    return true;
-  }
-
-  bool pop(T& item) {
-    const uint32_t r = read_.load(std::memory_order_relaxed);
-    if (r == write_.load(std::memory_order_acquire)) {
-      return false;  // 空
-    }
-    item = buf_[r];
-    read_.store((r + 1) & kMask, std::memory_order_release);
-    return true;
-  }
-
-  bool empty() const {
-    return read_.load(std::memory_order_acquire) ==
-           write_.load(std::memory_order_acquire);
-  }
-
- private:
-
-  static_assert((Capacity & (Capacity - 1)) == 0,
-                "Capacity must be power of 2");
-  static constexpr uint32_t kMask = Capacity - 1;
-  T buf_[Capacity] = {};
-  std::atomic<uint32_t> write_{0};
-  std::atomic<uint32_t> read_{0};
 };
 
 /* ============================================================
@@ -140,7 +95,9 @@ constexpr uint16_t kCobRxPdo0Base = 0x200u;
 constexpr uint16_t kCobRxPdo1Base = 0x240u;
 constexpr uint16_t kCobRxPdo2Base = 0x280u;
 constexpr uint16_t kCobRxPdo3Base = 0x2C0u;
+constexpr uint16_t kCobRxPdo6Base = 0x380u;
 constexpr uint16_t kCobTxPdo0Base = 0x400u;
+constexpr uint16_t kCobTxPdo1Base = 0x440u;
 constexpr uint16_t kCobSdoReqBase = 0x780u;
 constexpr uint16_t kCobSdoRspBase = 0x7C0u;
 
@@ -238,12 +195,19 @@ class modi_bus_canevo::Impl {
   /* 发送（线程安全） */
   int Send(const canevo::CanFrame& f);
 
+  /* 实时 PDO 发送（不经过 SDO 发送互斥锁） */
+  int SendRealtime(const canevo::CanFrame& f);
+
   /* SYNC 发送（独立 fd） */
   int SendSync(uint8_t counter);
+
+  /* 用户外部实时线程调用的一次总线步进 */
+  int RtStepOnce();
 
   /* Joint 注册/注销 */
   void RegisterJoint(uint8_t node_id, modi_joint_canevo::Impl* joint);
   void UnregisterJoint(uint8_t node_id);
+  std::vector<uint8_t> ScanJoints();
 
   /* 默认超时 */
   void SetDefaultSdoTimeoutMs(int ms) { default_sdo_timeout_ms_ = ms; }
@@ -258,15 +222,11 @@ class modi_bus_canevo::Impl {
   uint8_t DlcToLen(uint8_t dlc) const;
   uint8_t LenToDlc(uint8_t len) const;
 
-  /* 控制循环线程接口 */
-  int StartControlLoop(ControlLoopCallback callback);
-  int StopControlLoop();
-  void Join();
-
  private:
 
   int sock_fd_ = -1; /**< SocketCAN fd（接收 + SDO 发送） */
   int sync_fd_ = -1; /**< SYNC 专用 fd（无锁降低抖动） */
+  int pdo_fd_ = -1;  /**< 实时 PDO 专用 fd（无锁降低抖动） */
   std::string ifname_;
 
   /* Rx 线程 */
@@ -287,16 +247,14 @@ class modi_bus_canevo::Impl {
   std::mutex map_mu_;
   std::unordered_map<uint8_t, modi_joint_canevo::Impl*> joints_;  // 统一注册表
 
-  /* 控制循环线程 */
-  std::atomic<bool> ctrl_running_{false};
-  std::thread ctrl_thread_;
-  ControlLoopCallback ctrl_callback_;
+  std::atomic<uint8_t> sync_counter_{0};
+  std::atomic<uint64_t> stat_sync_send_failed_{0};
+  std::atomic<uint64_t> stat_pdo_send_failed_{0};
 
   /* 线程入口 */
   void RxLoop();
-  void ControlLoop();
-  struct timespec CalWaitClock(const struct timespec& current,
-                               long period_ns) const;
+  int ConfigureThread(pthread_t thread, int sched_policy, int sched_priority,
+                      int cpu_affinity);
 
   /* 帧分发 */
   void DispatchFrame(const canevo::CanFrame& f);
@@ -328,8 +286,6 @@ class modi_joint_canevo::Impl {
   /** @brief 是否已初始化 */
   bool isInitialized() const { return bus_ != nullptr; }
 
-  uint8_t nodeId() const { return node_id_; }
-
   /* ---- controlword 缓存操作（非阻塞） ---- */
   void SetEnable(bool on);
   void SetMode(CanEvoMode mode);
@@ -337,16 +293,19 @@ class modi_joint_canevo::Impl {
   void SetEstop(bool on);
   uint16_t GetControlword() const;
 
-  /* ---- PDO 发送（非阻塞，入队，自动携带内部 controlword） ---- */
+  /* ---- PDO 发送（非阻塞，自动携带内部 controlword） ---- */
   int SendRxPdo0(float target_pos_deg);
   int SendRxPdo1(float target_vel_rpm);
   int SendRxPdo2(float target_cur_a);
   int SendRxPdo3(float target_pos_deg, float profile_vel_rpm,
                  float profile_acc_rpms, float profile_dec_rpms);
+  int SendRxPdo6(float target_pos_deg, float target_vel_rpm,
+                 float target_torque_nm, float kp, float kd);
 
   /* ---- 状态读取（非阻塞） ---- */
   int GetStatus(JointStatus& out);
   uint16_t GetStatusword();
+  uint32_t StatusSeq() const;
   bool GetEmcy(uint16_t& out_fault);
 
   /* ---- SDO 阻塞读写 ---- */
@@ -363,6 +322,8 @@ class modi_joint_canevo::Impl {
   int sdoWriteU32(uint8_t index, uint8_t sub, uint32_t val);
   int sdoReadF32(uint8_t index, uint8_t sub, float& val);
   int sdoWriteF32(uint8_t index, uint8_t sub, float val);
+
+  void SetSdoTimeoutMs(int ms) { sdo_timeout_ms_ = ms; }
 
   /* ---- 内部配置接口 ---- */
   /** @brief 设置同步周期 (0x00/0x0F) - 在 NrtInit 时自动调用 */
@@ -400,10 +361,17 @@ class modi_joint_canevo::Impl {
   /** @brief 构建当前帧的 controlword（消费 fault_clr 脉冲） */
   uint16_t ConsumeControlword();
 
-  /* 状态缓存 (TxPDO0) — Rx 线程写，用户线程读 */
-  std::mutex status_mu_;
-  JointStatus status_cache_;
-  bool status_valid_ = false;
+  /* 状态缓存 (TxPDO0/1) — Rx 线程写，用户线程读；seq 每次更新递增 */
+  std::atomic<uint32_t> status_seq_{0};
+  std::atomic<bool> status_valid_{false};
+  std::atomic<uint16_t> statusword_cache_{0};
+  std::atomic<float> actual_pos_rad_cache_{0.0f};
+  std::atomic<float> actual_vel_rads_cache_{0.0f};
+  std::atomic<float> actual_cur_a_cache_{0.0f};
+  std::atomic<float> actual_acc_radss_cache_{0.0f};
+  std::atomic<float> bus_voltage_v_cache_{0.0f};
+  std::atomic<float> pcb_temp_c_cache_{0.0f};
+  std::atomic<float> motor_temp_c_cache_{0.0f};
 
   /* EMCY 队列 */
   canevo::RingQueue<uint16_t> emcy_q_{16};
@@ -411,5 +379,6 @@ class modi_joint_canevo::Impl {
   /* 内部帧处理 */
   void OnSdoResp(const canevo::CanFrame& f);
   void OnTxPdo0(const canevo::CanFrame& f);
+  void OnTxPdo1(const canevo::CanFrame& f);
   void OnEmcy(const canevo::CanFrame& f);
 };
