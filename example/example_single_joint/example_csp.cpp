@@ -49,7 +49,14 @@ static modi_bus_canevo* g_bus = nullptr;
 static modi_joint_canevo* g_joint = nullptr;
 static int g_period_us = 5000;
 static std::atomic<int> g_rt_ret{0};
-static std::atomic<bool> g_rt_exit{false};
+
+enum class RunState {
+  kRunning,
+  kStopRequested,
+  kRtExit,
+};
+
+static std::atomic<RunState> g_run_state{RunState::kRunning};
 
 timespec AddNs(timespec current, long ns) {
   current.tv_nsec += ns;
@@ -74,7 +81,7 @@ void* RtLoop(void*) {
   auto actual_pos = g_joint->NrtGetActualPosition();
   target_pos_rad = std::clamp(actual_pos, kCspMinPosRad, kCspMaxPosRad);
 
-  while (!g_rt_exit.load(std::memory_order_acquire)) {
+  while (g_run_state.load(std::memory_order_acquire) != RunState::kRtExit) {
     next_wakeup = AddNs(next_wakeup, period_ns);
     const int sleep_ret =
         __RT(clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup,
@@ -128,7 +135,7 @@ void* RtLoop(void*) {
 // 信号处理函数
 void SignalHandler(int signum) {
   (void)signum;
-  g_rt_exit.store(true, std::memory_order_release);
+  g_run_state.store(RunState::kStopRequested, std::memory_order_release);
 }
 
 void PrintJointDiag(modi_joint_canevo& joint) {
@@ -300,7 +307,8 @@ int main() {
 
   // 12. 如果有故障就先清除故障。
   auto fault_code = joint.NrtGetFaultCode();
-  std::cerr << "fault_code: " << (int)fault_code << std::endl;
+  std::cerr << "fault_code: 0x" << std::hex
+            << static_cast<uint16_t>(fault_code) << std::dec << std::endl;
   if (fault_code != CanEvoFault::kNone) {
     std::cerr << "检测到故障，先清除故障..." << std::endl;
     PrintJointDiag(joint);
@@ -358,6 +366,25 @@ int main() {
   std::cout << "CSP 步进轨迹运行中：每周期 +0.1 deg，按 Ctrl+C 终止... "
             << std::endl;
 
+  const int ok = static_cast<int>(CanEvoError::kOk);
+  while (g_run_state.load(std::memory_order_acquire) == RunState::kRunning &&
+         g_rt_ret.load(std::memory_order_acquire) == ok) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+
+  if (g_run_state.load(std::memory_order_acquire) == RunState::kStopRequested &&
+      g_rt_ret.load(std::memory_order_acquire) == ok) {
+    std::cout << "收到退出信号，先失能关节并保持 CSP 周期帧收尾..."
+              << std::endl;
+    const int disable_ret = joint.NrtDisable();
+    if (disable_ret != static_cast<int>(CanEvoError::kOk)) {
+      std::cerr << "✗ 失能失败, ret=" << disable_ret << std::endl;
+      PrintJointDiag(joint);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+
+  g_run_state.store(RunState::kRtExit, std::memory_order_release);
   __RT(pthread_join(rt_thread, nullptr));
   PrintEndTime();
 
