@@ -106,16 +106,17 @@ void* RtLoop(void*) {
       const auto servo_state = joint.RtGetServoState();
       if (servo_state == CanEvoServoState::kFault) {
         g_rt_ret.store(-1000, std::memory_order_release);
-        return nullptr;
+        break;
       }
       if (current_mode == CanEvoMode::kPp) {
         g_rt_ret.store(-1001, std::memory_order_release);
-        return nullptr;
+        break;
       }
       const bool in_csp = current_mode == CanEvoMode::kCsp &&
                           servo_state == CanEvoServoState::kRunning;
       if (!in_csp) continue;
 
+      // 在 -90 度～+90 度之间运动，每次步进 0.05 度
       target_pos_rad[i] += step_rad[i];
       if (target_pos_rad[i] >= kCspMaxPosRad) {
         target_pos_rad[i] = kCspMaxPosRad;
@@ -128,8 +129,13 @@ void* RtLoop(void*) {
       const int set_ret = joint.RtSetCspTargetPosition(target_pos_rad[i]);
       if (set_ret != static_cast<int>(CanEvoError::kOk)) {
         g_rt_ret.store(set_ret, std::memory_order_release);
-        return nullptr;
+        break;
       }
+    }
+
+    if (g_rt_ret.load(std::memory_order_acquire) !=
+        static_cast<int>(CanEvoError::kOk)) {
+      break;
     }
   }
 
@@ -165,28 +171,38 @@ void PrintEndTime() {
 
 bool WaitServoState(modi_joint_canevo& joint, CanEvoServoState target,
                     const char* action) {
+  // 等待 3s
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds(3);
   while (std::chrono::steady_clock::now() < deadline) {
     if (joint.NrtGetServoState() == target) return true;
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
+
+  std::cerr << action << "超时" << std::endl;
   return false;
 }
 
-bool WaitControlMode(modi_joint_canevo& joint, CanEvoMode target) {
+bool WaitControlMode(modi_joint_canevo& joint, CanEvoMode target,
+                     const char* action) {
+  // 等待 3 秒
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  CanEvoMode current = joint.NrtGetCurrentMode();
   while (std::chrono::steady_clock::now() < deadline) {
-    if (joint.NrtGetCurrentMode() == target) return true;
+    current = joint.NrtGetCurrentMode();
+    if (current == target) return true;
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
+
+  std::cerr << action << "超时, 当前模式=" << static_cast<int>(current)
+            << ", 目标模式=" << static_cast<int>(target) << std::endl;
   return false;
 }
 
 int main() {
   std::cout << "========================================" << std::endl;
-  std::cout << "CSP 测试程序 - 多关节从当前位置开始每周期步进 0.1deg"
+  std::cout << "CSP 测试程序 - 多关节从当前位置开始每周期步进 0.05deg"
             << std::endl;
   std::cout << "========================================" << std::endl;
   qiuniu_init();
@@ -194,6 +210,7 @@ int main() {
             << (CANEVO_HAVE_NECRO ? "ON (__RT -> qiuniu)" : "OFF (POSIX)")
             << std::endl;
 
+  // 1. 禁止内存交换
   if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
     std::cerr << "警告: mlockall 失败，实时抖动可能增大" << std::endl;
     return -1;
@@ -202,6 +219,7 @@ int main() {
   pthread_attr_t attr;
   pthread_attr_init(&attr);
 
+  // 2. 不继承主线程属性
   int attr_ret = pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
   if (attr_ret != 0) {
     std::cerr << "警告: pthread_attr_setinheritsched 失败, errno=" << attr_ret
@@ -209,6 +227,7 @@ int main() {
     return -1;
   }
 
+  // 3. 线程调度策略使用 SCHED_FIFO
   int sched_policy = SCHED_FIFO;
   attr_ret = pthread_attr_setschedpolicy(&attr, sched_policy);
   if (attr_ret != 0) {
@@ -217,6 +236,7 @@ int main() {
     return -1;
   }
 
+  // 4. 线程优先级设为 99
   sched_param param{};
   param.sched_priority = 99;
   attr_ret = pthread_attr_setschedparam(&attr, &param);
@@ -226,6 +246,7 @@ int main() {
     return -1;
   }
 
+  // 5. 设置 CPU 亲和性，把实时线程绑定在隔离内核；当前启动参数隔离的是 CPU1
   cpu_set_t cpuset;
   CPU_ZERO(&cpuset);
   int cpu = 1;
@@ -238,30 +259,36 @@ int main() {
   }
   std::cout << "✓ 实时线程绑定 CPU" << cpu << std::endl;
 
+  // 6. 配置 SDK 内部状态更新线程
   TaskConfig task_config;
-  task_config.sync_period_us = 5000;
+  task_config.sync_period_us = 5000;  // 5000 us = 5 ms, 下发给关节
+  // 不要和实时线程绑到同一个 cpu 上
   task_config.cpu_affinity = 3;
   task_config.sched_policy = sched_policy;
+  // 如果与实时线程绑在同一个 CPU 上，优先级建议比实时线程低一些
   task_config.sched_priority = 90;
   std::cout << "✓ SDK Rx 线程绑定 CPU" << task_config.cpu_affinity
             << ", 优先级 " << task_config.sched_priority << std::endl;
 
+  // 7. 创建总线和关节对象
   modi_bus_canevo bus;
   std::vector<modi_joint_canevo> joints;
   g_bus = &bus;
   g_joints = &joints;
+  // 注册信号处理函数
+  std::signal(SIGINT, SignalHandler);   // Ctrl+C
+  std::signal(SIGTERM, SignalHandler);  // kill 命令
 
-  std::signal(SIGINT, SignalHandler);
-  std::signal(SIGTERM, SignalHandler);
-
+  // 8. 打开已手动配置好的 CAN 总线（内部只启动 Rx 线程）
   if (bus.Open("can0", task_config) != static_cast<int>(CanEvoError::kOk)) {
     std::cerr << "✗ 无法打开 CAN 总线" << std::endl;
     return -1;
   }
-
+  // 9. 配置超时
   bus.SetSdoTimeoutMs(50);
   bus.SetPdoTimeoutMs(50);
 
+  // 10. 扫描 can 总线上的节点，若已知节点号可以跳过此步
   const auto joint_ids = bus.NrtScanJoints();
   if (joint_ids.empty()) {
     std::cerr << "✗ 未扫描到在线关节" << std::endl;
@@ -277,6 +304,7 @@ int main() {
   std::vector<modi_joint_canevo> tmp_joints(joint_ids.size());
   joints.swap(tmp_joints);
 
+  // 11. 初始化全部关节
   for (size_t i = 0; i < joint_ids.size(); ++i) {
     if (joints[i].NrtInit(bus, joint_ids[i]) !=
         static_cast<int>(CanEvoError::kOk)) {
@@ -292,11 +320,12 @@ int main() {
               << static_cast<int>(joint_ids[i]) << ")" << std::endl;
   }
 
+  // 12. 如果有故障就先清除故障
   for (size_t i = 0; i < joints.size(); ++i) {
     const auto fault_code = joints[i].NrtGetFaultCode();
-    std::cerr << "joint " << static_cast<int>(joint_ids[i])
-              << " fault_code: 0x" << std::hex
-              << static_cast<uint16_t>(fault_code) << std::dec << std::endl;
+    std::cerr << "joint " << static_cast<int>(joint_ids[i]) << " fault_code: 0x"
+              << std::hex << static_cast<uint16_t>(fault_code) << std::dec
+              << std::endl;
     if (fault_code != CanEvoFault::kNone) {
       std::cerr << "检测到故障，先清除故障..." << std::endl;
       PrintJointDiag(joints[i], joint_ids[i]);
@@ -315,6 +344,7 @@ int main() {
     }
   }
 
+  // 13. 使能全部关节并切换到 CSP
   for (size_t i = 0; i < joints.size(); ++i) {
     if (joints[i].NrtEnable(CanEvoMode::kCsp) !=
         static_cast<int>(CanEvoError::kOk)) {
@@ -333,8 +363,6 @@ int main() {
   for (size_t i = 0; i < joints.size(); ++i) {
     if (!WaitServoState(joints[i], CanEvoServoState::kRunning,
                         "等待 CSP Running 状态")) {
-      std::cerr << "✗ 等待运行状态失败, ID=" << static_cast<int>(joint_ids[i])
-                << std::endl;
       PrintJointDiag(joints[i], joint_ids[i]);
       pthread_attr_destroy(&attr);
       for (auto& joint : joints) {
@@ -343,9 +371,7 @@ int main() {
       bus.Close();
       return -1;
     }
-    if (!WaitControlMode(joints[i], CanEvoMode::kCsp)) {
-      std::cerr << "✗ 等待模式切换失败, ID=" << static_cast<int>(joint_ids[i])
-                << std::endl;
+    if (!WaitControlMode(joints[i], CanEvoMode::kCsp, "等待 CSP 模式切换")) {
       PrintJointDiag(joints[i], joint_ids[i]);
       pthread_attr_destroy(&attr);
       for (auto& joint : joints) {
@@ -356,6 +382,7 @@ int main() {
     }
   }
 
+  // 14. CSP Running 后再创建实时线程；电机会从当前位置开始步进
   pthread_t rt_thread{};
   const int create_ret =
       __RT(pthread_create(&rt_thread, &attr, RtLoop, nullptr));
@@ -374,7 +401,7 @@ int main() {
   }
 
   std::cout << "✓ 全部关节已切换到 CSP 模式" << std::endl;
-  std::cout << "CSP 步进轨迹运行中：每周期 +0.1 deg，按 Ctrl+C 终止... "
+  std::cout << "CSP 步进轨迹运行中：每周期 +0.05 deg，按 Ctrl+C 终止... "
             << std::endl;
 
   const int ok = static_cast<int>(CanEvoError::kOk);
@@ -402,13 +429,12 @@ int main() {
   __RT(pthread_join(rt_thread, nullptr));
   PrintEndTime();
 
-  for (size_t i = 0; i < joints.size(); ++i) {
-    PrintJointDiag(joints[i], joint_ids[i]);
-  }
   const int rt_ret = g_rt_ret.load(std::memory_order_acquire);
   if (rt_ret != static_cast<int>(CanEvoError::kOk)) {
     if (rt_ret == -1000) {
       std::cerr << "实时线程出错: CanEvoServoState::kFault" << std::endl;
+    } else if (rt_ret == -1001) {
+      std::cerr << "实时线程出错: 意外切换到 PP 模式" << std::endl;
     } else {
       std::cerr << "实时线程出错, ret=" << rt_ret << std::endl;
     }
