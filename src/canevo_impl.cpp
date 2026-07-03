@@ -11,6 +11,7 @@
  */
 
 #include "canevo_impl.h"
+#include "canevo_rt_compat.hpp"
 
 #include <linux/can.h>
 #include <linux/can/raw.h>
@@ -100,7 +101,7 @@ int modi_bus_canevo::Impl::SendFrame(int fd, const CanFrame& f) {
   cf.flags = CANFD_BRS; /* BRS always on for CAN-FD */
   std::memcpy(cf.data, f.data, f.len);
 
-  ssize_t nbytes = ::write(fd, &cf, sizeof(cf));
+  ssize_t nbytes = __RT(write(fd, &cf, sizeof(cf)));
   return (nbytes == static_cast<ssize_t>(sizeof(cf))) ? 0 : -1;
 }
 
@@ -109,7 +110,7 @@ int modi_bus_canevo::Impl::ConfigureThread(pthread_t thread, int sched_policy,
                                            int cpu_affinity) {
   struct sched_param param {};
   param.sched_priority = sched_priority;
-  if (pthread_setschedparam(thread, sched_policy, &param) != 0) {
+  if (__RT(pthread_setschedparam(thread, sched_policy, &param)) != 0) {
     return static_cast<int>(CanEvoError::kRealtimeConfigFailed);
   }
 
@@ -134,6 +135,8 @@ modi_bus_canevo::Impl::~Impl() { Close(); }
 int modi_bus_canevo::Impl::Open(const std::string& ifname,
                                 const TaskConfig& task_config) {
   if (sock_fd_ >= 0) return static_cast<int>(CanEvoError::kOk);  // 已打开
+
+  LogCanevoHardRealtimeOnce();
 
   ifname_ = ifname;
   task_config_ = task_config;  // 保存配置
@@ -306,7 +309,7 @@ void modi_bus_canevo::Impl::RxLoop() {
     int ret = ::poll(&pfd, 1, 5 /* ms */);
     if (ret <= 0) continue;
 
-    ssize_t nbytes = ::read(sock_fd_, &cf, sizeof(cf));
+    ssize_t nbytes = __RT(read(sock_fd_, &cf, sizeof(cf)));
     if (nbytes <= 0) continue;
 
     CanFrame f;

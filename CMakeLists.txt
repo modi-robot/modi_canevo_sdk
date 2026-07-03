@@ -6,9 +6,34 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(CMakePackageConfigHelpers)
 set(CANEVO_SDK_VERSION "0.1.0")
 set(CANEVO_EXAMPLE_SOURCE_BUILD OFF CACHE BOOL "Build examples with source target instead of find_package")
+option(CANEVO_BUILD_EXAMPLES "Build CanEvo SDK examples" ON)
 
-# 设置安装路径为 build/install（如果未指定）
-if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT OR CMAKE_INSTALL_PREFIX STREQUAL "/usr/local")
+set(_canevo_sdk_top_level OFF)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  set(_canevo_sdk_top_level ON)
+endif()
+
+set(CANEVO_HAVE_NECRO OFF)
+find_package(Necro QUIET)
+if(Necro_FOUND AND TARGET Necro::qiuniu)
+  set(CANEVO_HAVE_NECRO ON)
+  message(STATUS "canevo_sdk: NECRO found — linking Necro::qiuniu")
+else()
+  message(STATUS "canevo_sdk: NECRO not found — using POSIX fallback")
+endif()
+
+function(canevo_sdk_enable_necro target_name)
+  if(CANEVO_HAVE_NECRO)
+    target_compile_definitions(${target_name} PRIVATE CANEVO_HAVE_NECRO=1 __QIUNIU__)
+    target_compile_options(${target_name} PRIVATE -fasynchronous-unwind-tables)
+    target_link_libraries(${target_name} PRIVATE Necro::qiuniu)
+  else()
+    target_compile_definitions(${target_name} PRIVATE CANEVO_HAVE_NECRO=0)
+  endif()
+endfunction()
+
+# 独立构建时才覆盖默认安装前缀
+if(_canevo_sdk_top_level AND (CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT OR CMAKE_INSTALL_PREFIX STREQUAL "/usr/local"))
   set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/install" CACHE PATH "Install path prefix" FORCE)
 endif()
 
@@ -27,13 +52,17 @@ target_link_libraries(canevo_sdk_x86
     PRIVATE pthread
 )
 
+canevo_sdk_enable_necro(canevo_sdk_x86)
+
 # Make the SDK .so prefer packaged C++ runtime libs.
 set_target_properties(canevo_sdk_x86 PROPERTIES
     INSTALL_RPATH "\$ORIGIN/runtime"
 )
 
 # ---- 示例 ----
-add_subdirectory(example)
+if(CANEVO_BUILD_EXAMPLES)
+  add_subdirectory(example)
+endif()
 
 # ---- 安装 ----
 install(TARGETS canevo_sdk_x86
@@ -117,6 +146,7 @@ install(FILES
 )
 
 # ---- 打包（生成 make package 目标）----
+if(_canevo_sdk_top_level)
 set(CPACK_PACKAGE_NAME "${PROJECT_NAME}")
 set(CPACK_PACKAGE_VERSION "${CANEVO_SDK_VERSION}")
 set(CPACK_PACKAGE_VENDOR "modi")
@@ -134,3 +164,4 @@ if(NOT GIT_COMMIT_SHORT)
 endif()
 set(CPACK_PACKAGE_FILE_NAME "canevo_sdk-${CPACK_PACKAGE_VERSION}-${GIT_COMMIT_SHORT}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
 include(CPack)
+endif()
