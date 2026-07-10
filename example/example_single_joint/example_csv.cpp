@@ -10,8 +10,8 @@
  *
  * 测试内容：
  * 1. 使能 CSV 模式
- * 2. 在 -90°～+90° 范围内以 10°/s 往复运动
- * 3. 到达 -90° 时切换为 +10°/s，到达 +90° 时切换为 -10°/s
+ * 2. 在 -30°～+30° 范围内以 3°/s 往复运动
+ * 3. 到达 -30° 时切换为 +3°/s，到达 +30° 时切换为 -3°/s
  */
 
 #include <pthread.h>
@@ -19,10 +19,12 @@
 #include <sys/mman.h>
 #include <time.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <csignal>
+#include <cstdlib>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
@@ -45,9 +47,9 @@ inline void qiuniu_init() {}
 #endif
 
 constexpr float kDegToRad = static_cast<float>(M_PI) / 180.0f;
-constexpr float kCsvSpeedRadS = 10.0f * kDegToRad;
-constexpr float kCsvMinPosRad = -90.0f * kDegToRad;
-constexpr float kCsvMaxPosRad = 90.0f * kDegToRad;
+constexpr float kCsvSpeedRadS = 3.0f * kDegToRad;
+constexpr float kCsvMinPosRad = -30.0f * kDegToRad;
+constexpr float kCsvMaxPosRad = 30.0f * kDegToRad;
 
 // 全局变量用于信号处理
 static modi_bus_canevo* g_bus = nullptr;
@@ -191,9 +193,9 @@ bool WaitControlMode(modi_joint_canevo& joint, CanEvoMode target,
   return false;
 }
 
-int main() {
+int main(int argc, char* argv[]) {
   std::cout << "========================================" << std::endl;
-  std::cout << "CSV 测试程序 - 在 ±90° 内以 10°/s 往复运动" << std::endl;
+  std::cout << "CSV 测试程序 - 在 ±30° 内以 3°/s 往复运动" << std::endl;
   std::cout << "========================================" << std::endl;
   qiuniu_init();
   std::cout << "NIIC hard realtime: "
@@ -292,9 +294,29 @@ int main() {
     std::cout << static_cast<int>(id) << " ";
   }
   std::cout << std::endl;
-  const uint8_t node_id = joint_ids.front();
-  std::cout << "✓ 默认选择第一个关节 ID: " << static_cast<int>(node_id)
-            << std::endl;
+  uint8_t node_id = joint_ids.front();
+  if (argc >= 2) {
+    const int requested_id = std::atoi(argv[1]);
+    if (requested_id < 1 || requested_id > 127) {
+      std::cerr << "✗ 无效关节 ID: " << argv[1] << std::endl;
+      bus.Close();
+      return -1;
+    }
+
+    const auto it = std::find(joint_ids.begin(), joint_ids.end(),
+                              static_cast<uint8_t>(requested_id));
+    if (it == joint_ids.end()) {
+      std::cerr << "✗ 指定关节不在线, ID=" << requested_id << std::endl;
+      bus.Close();
+      return -1;
+    }
+
+    node_id = static_cast<uint8_t>(requested_id);
+    std::cout << "✓ 指定选择关节 ID: " << requested_id << std::endl;
+  } else {
+    std::cout << "✓ 默认选择第一个关节 ID: " << static_cast<int>(node_id)
+              << std::endl;
+  }
 
   // 11. 初始化关节
   if (joint.NrtInit(bus, node_id) != static_cast<int>(CanEvoError::kOk)) {
@@ -363,7 +385,7 @@ int main() {
   }
 
   std::cout << "✓ 关节已切换到 CSV 模式" << std::endl;
-  std::cout << "CSV 速度轨迹运行中：±90° 内 10°/s 往复，按 Ctrl+C 终止..."
+  std::cout << "CSV 速度轨迹运行中：±30° 内 3°/s 往复，按 Ctrl+C 终止..."
             << std::endl;
 
   const int ok = static_cast<int>(CanEvoError::kOk);

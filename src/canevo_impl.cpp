@@ -101,7 +101,7 @@ int modi_bus_canevo::Impl::SendFrame(int fd, const CanFrame& f) {
   cf.flags = CANFD_BRS; /* BRS always on for CAN-FD */
   std::memcpy(cf.data, f.data, f.len);
 
-  ssize_t nbytes = __RT(write(fd, &cf, sizeof(cf)));
+  ssize_t nbytes = write(fd, &cf, sizeof(cf));
   return (nbytes == static_cast<ssize_t>(sizeof(cf))) ? 0 : -1;
 }
 
@@ -309,7 +309,7 @@ void modi_bus_canevo::Impl::RxLoop() {
     int ret = ::poll(&pfd, 1, 5 /* ms */);
     if (ret <= 0) continue;
 
-    ssize_t nbytes = __RT(read(sock_fd_, &cf, sizeof(cf)));
+    ssize_t nbytes = read(sock_fd_, &cf, sizeof(cf));
     if (nbytes <= 0) continue;
 
     CanFrame f;

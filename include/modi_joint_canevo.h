@@ -356,6 +356,20 @@ class modi_joint_canevo {
   int RtSetCsvTargetVelocity(const float target_vel_rads);
 
   /**
+   * @brief PP 模式：发送目标位置和轮廓参数 (RxPDO3, cob_id = 0x2C0 + node_id)
+   * [实时接口]
+   * @param target_pos_rad 目标位置 (rad)
+   * @param profile_vel_rads 轮廓速度 (rad/s)
+   * @param profile_acc_radss 轮廓加速度 (rad/s²)
+   * @param profile_dec_radss 轮廓减速度 (rad/s²)
+   * @return CanEvoError::kOk 成功
+   */
+  int RtSetPpTargetPosition(const float target_pos_rad,
+                            const float profile_vel_rads,
+                            const float profile_acc_radss,
+                            const float profile_dec_radss);
+
+  /**
    * @brief CST 模式：发送目标转矩电流 (RxPDO2, cob_id = 0x280 + node_id)
    * [实时接口]
    * @param target_cur_a 目标转矩电流 (A)

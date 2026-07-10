@@ -104,6 +104,17 @@ int modi_joint_canevo::RtSetCsvTargetVelocity(const float target_vel_rads) {
   return impl_->SendRxPdo1(target_vel_rads * kRadsToRpm);
 }
 
+int modi_joint_canevo::RtSetPpTargetPosition(
+    const float target_pos_rad, const float profile_vel_rads,
+    const float profile_acc_radss, const float profile_dec_radss) {
+  if (!impl_->isInitialized())
+    return static_cast<int>(CanEvoError::kNotInitialized);
+  return impl_->SendRxPdo3(target_pos_rad * kRadToDeg,
+                           profile_vel_rads * kRadsToRpm,
+                           profile_acc_radss * kRadsToRpm,
+                           profile_dec_radss * kRadsToRpm);
+}
+
 int modi_joint_canevo::RtSetCstTargetCurrent(const float target_cur_a) {
   if (!impl_->isInitialized())
     return static_cast<int>(CanEvoError::kNotInitialized);
