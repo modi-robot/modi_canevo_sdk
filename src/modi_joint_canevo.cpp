@@ -104,13 +104,23 @@ int modi_joint_canevo::RtSetCsvTargetVelocity(const float target_vel_rads) {
   return impl_->SendRxPdo1(target_vel_rads * kRadsToRpm);
 }
 
-int modi_joint_canevo::RtSetPpTargetPosition(
-    const float target_pos_rad, const float profile_vel_rads,
-    const float profile_acc_radss, const float profile_dec_radss) {
+int modi_joint_canevo::RtSetPpTargetPosition(const float target_pos_rad,
+                                             const float profile_vel_rads,
+                                             const float profile_acc_radss,
+                                             const float profile_dec_radss) {
   if (!impl_->isInitialized())
     return static_cast<int>(CanEvoError::kNotInitialized);
-  return impl_->SendRxPdo3(target_pos_rad * kRadToDeg,
-                           profile_vel_rads * kRadsToRpm,
+  return impl_->SendRxPdo3(
+      target_pos_rad * kRadToDeg, profile_vel_rads * kRadsToRpm,
+      profile_acc_radss * kRadsToRpm, profile_dec_radss * kRadsToRpm);
+}
+
+int modi_joint_canevo::RtSetPvTargetVelocity(const float target_vel_rads,
+                                             const float profile_acc_radss,
+                                             const float profile_dec_radss) {
+  if (!impl_->isInitialized())
+    return static_cast<int>(CanEvoError::kNotInitialized);
+  return impl_->SendRxPdo4(target_vel_rads * kRadsToRpm,
                            profile_acc_radss * kRadsToRpm,
                            profile_dec_radss * kRadsToRpm);
 }
@@ -125,11 +135,11 @@ int modi_joint_canevo::NrtSetPvTargetVelocity(const float target_vel,
                                               const float acc) {
   if (!impl_->isInitialized())
     return static_cast<int>(CanEvoError::kNotInitialized);
-  int ret = impl_->sdoWriteF32(0x21, 0x03, target_vel * kRadsToRpm);
+  int ret = impl_->sdoWriteF32(0x21, 0x08, acc * kRadsToRpm);
   if (ret != 0) return ret;
-  ret = impl_->sdoWriteF32(0x21, 0x08, acc * kRadsToRpm);
+  ret = impl_->sdoWriteF32(0x21, 0x09, acc * kRadsToRpm);
   if (ret != 0) return ret;
-  return impl_->sdoWriteF32(0x21, 0x09, acc * kRadsToRpm);
+  return impl_->sdoWriteF32(0x21, 0x03, target_vel * kRadsToRpm);
 }
 
 int modi_joint_canevo::NrtSetPtTargetCurrent(const float target_cur_a,
@@ -147,8 +157,8 @@ int modi_joint_canevo::RtSetMitTarget(const float target_pos_rad,
                                       const float kp, const float kd) {
   if (!impl_->isInitialized())
     return static_cast<int>(CanEvoError::kNotInitialized);
-  return impl_->SendRxPdo6(target_pos_rad, target_vel_rads, target_torque_nm, kp,
-                           kd);
+  return impl_->SendRxPdo6(target_pos_rad, target_vel_rads, target_torque_nm,
+                           kp, kd);
 }
 
 int modi_joint_canevo::RtGetJointStatus(JointStatus& out) {

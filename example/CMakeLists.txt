@@ -47,6 +47,8 @@ endfunction()
 
 add_sdk_example(example_single_joint_sdo example_single_joint/example_sdo.cpp)
 add_sdk_example(example_single_joint_csv example_single_joint/example_csv.cpp)
+add_sdk_example(example_single_joint_pv example_single_joint/example_pv.cpp)
+enable_necro_rt(example_single_joint_pv)
 add_sdk_example(example_single_joint_cst example_single_joint/example_cst.cpp)
 add_sdk_example(example_single_joint_nrt_pp example_single_joint/example_nrt_pp.cpp)
 add_sdk_example(example_single_joint_rt_pp example_single_joint/example_rt_pp.cpp)

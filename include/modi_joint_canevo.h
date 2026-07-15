@@ -60,13 +60,13 @@
 
 #pragma once
 
+#include <sched.h>
+
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
 #include <vector>
-
-#include <sched.h>
 
 /* ============================================================
  * 错误码
@@ -272,7 +272,8 @@ class modi_bus_canevo {
   /**
    * @brief 执行一次实时总线步进：发送 SYNC [实时接口]
    * @return CanEvoError::kOk 成功，其他为失败
-   * @note TxPDO 由 Open() 后启动的 Rx 线程异步接收并更新缓存；本接口不等待 TxPDO
+   * @note TxPDO 由 Open() 后启动的 Rx 线程异步接收并更新缓存；本接口不等待
+   * TxPDO
    */
   int RtStepOnce();
 
@@ -366,6 +367,18 @@ class modi_joint_canevo {
    */
   int RtSetPpTargetPosition(const float target_pos_rad,
                             const float profile_vel_rads,
+                            const float profile_acc_radss,
+                            const float profile_dec_radss);
+
+  /**
+   * @brief PV 模式：发送目标速度和轮廓参数 (RxPDO4, cob_id = 0x300 + node_id)
+   * [实时接口]
+   * @param target_vel_rads 目标速度 (rad/s)
+   * @param profile_acc_radss 轮廓加速度 (rad/s²)
+   * @param profile_dec_radss 轮廓减速度 (rad/s²)
+   * @return CanEvoError::kOk 成功
+   */
+  int RtSetPvTargetVelocity(const float target_vel_rads,
                             const float profile_acc_radss,
                             const float profile_dec_radss);
 
@@ -652,7 +665,7 @@ class modi_joint_canevo {
 
   /**
    * @brief PV 模式：通过 SDO 设置目标速度和轮廓加减速度 [非实时接口]
-   * @note 写入 0x21/0x03, 0x21/0x08, 0x21/0x09
+   * @note 写入 0x21/0x08, 0x21/0x09, 0x21/0x03，目标速度最后写入
    */
   int NrtSetPvTargetVelocity(const float target_vel, const float acc);
 

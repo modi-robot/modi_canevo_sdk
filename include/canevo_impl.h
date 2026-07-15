@@ -95,6 +95,7 @@ constexpr uint16_t kCobRxPdo0Base = 0x200u;
 constexpr uint16_t kCobRxPdo1Base = 0x240u;
 constexpr uint16_t kCobRxPdo2Base = 0x280u;
 constexpr uint16_t kCobRxPdo3Base = 0x2C0u;
+constexpr uint16_t kCobRxPdo4Base = 0x300u;
 constexpr uint16_t kCobRxPdo6Base = 0x380u;
 constexpr uint16_t kCobTxPdo0Base = 0x400u;
 constexpr uint16_t kCobTxPdo1Base = 0x440u;
@@ -299,6 +300,8 @@ class modi_joint_canevo::Impl {
   int SendRxPdo2(float target_cur_a);
   int SendRxPdo3(float target_pos_deg, float profile_vel_rpm,
                  float profile_acc_rpms, float profile_dec_rpms);
+  int SendRxPdo4(float target_vel_rpm, float profile_acc_rpms,
+                 float profile_dec_rpms);
   int SendRxPdo6(float target_pos_deg, float target_vel_rpm,
                  float target_torque_nm, float kp, float kd);
 

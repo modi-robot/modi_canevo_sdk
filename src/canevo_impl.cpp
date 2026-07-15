@@ -11,7 +11,6 @@
  */
 
 #include "canevo_impl.h"
-#include "canevo_rt_compat.hpp"
 
 #include <linux/can.h>
 #include <linux/can/raw.h>
@@ -30,6 +29,8 @@
 #include <cmath>
 #include <cstring>
 #include <vector>
+
+#include "canevo_rt_compat.hpp"
 
 using namespace canevo;
 
@@ -503,6 +504,26 @@ int modi_joint_canevo::Impl::SendRxPdo3(float target_pos_deg,
   WriteF32LE(f.data + 10, profile_acc_rpms);
   WriteF32LE(f.data + 14, profile_dec_rpms);
   WriteU16LE(f.data + 18, 0);
+
+  return bus_->SendRealtime(f);
+}
+
+int modi_joint_canevo::Impl::SendRxPdo4(float target_vel_rpm,
+                                        float profile_acc_rpms,
+                                        float profile_dec_rpms) {
+  if (!bus_ || !bus_->IsOpen())
+    return static_cast<int>(CanEvoError::kBusNotOpen);
+
+  CanFrame f;
+  f.id = kCobRxPdo4Base + node_id_;
+  f.len = 16;
+  f.dlc = bus_->LenToDlc(f.len);
+
+  WriteU16LE(f.data + 0, ConsumeControlword());
+  WriteF32LE(f.data + 2, target_vel_rpm);
+  WriteF32LE(f.data + 6, profile_acc_rpms);
+  WriteF32LE(f.data + 10, profile_dec_rpms);
+  WriteU16LE(f.data + 14, 0);
 
   return bus_->SendRealtime(f);
 }

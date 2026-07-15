@@ -284,7 +284,9 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 | 6 | `RtSetCspTargetPosition(target_pos_rad)` | `target_pos_rad`: 目标位置（const float），单位：rad | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | CSP 模式：发送目标位置（RxPDO0，cob_id = 0x200 + node_id） [实时接口] |
 | 7 | `RtSetCsvTargetVelocity(target_vel_rads)` | `target_vel_rads`: 目标速度（const float），单位：rad/s | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | CSV 模式：发送目标速度（RxPDO1，cob_id = 0x240 + node_id） [实时接口] |
 | 8 | `RtSetCstTargetCurrent(target_cur_a)` | `target_cur_a`: 目标转矩电流（const float），单位：A | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | CST 模式：发送目标转矩电流（RxPDO2，cob_id = 0x280 + node_id） [实时接口] |
-| 9 | `RtSetMitTarget(target_pos_rad, target_vel_rads, target_torque_nm, kp, kd)` | 目标位置、目标速度、前馈力矩、刚度、阻尼 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | MIT 模式：发送混合控制参数（RxPDO6，cob_id = 0x380 + node_id） [实时接口] |
+| 9 | `RtSetPpTargetPosition(target_pos_rad, profile_vel_rads, profile_acc_radss, profile_dec_radss)` | 目标位置、轮廓速度、轮廓加速度、轮廓减速度 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | PP 模式：发送目标位置和轮廓参数（RxPDO3，cob_id = 0x2C0 + node_id） [实时接口] |
+| 10 | `RtSetPvTargetVelocity(target_vel_rads, profile_acc_radss, profile_dec_radss)` | 目标速度、轮廓加速度、轮廓减速度 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | PV 模式：发送目标速度和轮廓参数（RxPDO4，cob_id = 0x300 + node_id） [实时接口] |
+| 11 | `RtSetMitTarget(target_pos_rad, target_vel_rads, target_torque_nm, kp, kd)` | 目标位置、目标速度、前馈力矩、刚度、阻尼 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | MIT 模式：发送混合控制参数（RxPDO6，cob_id = 0x380 + node_id） [实时接口] |
 
 ### 5.3 状态读取（非阻塞）
 
@@ -395,7 +397,7 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
 | 66 | `NrtSetPpTargetPosition(target_pos, vel, acc)` | `target_pos`: 目标位置（const float），单位：rad<br>`vel`: 轮廓速度（const float），单位：rad/s<br>`acc`: 轮廓加速度/减速度（const float），单位：rad/s² | `int` — CanEvoError::kOk 成功 | 一次性设置 PP 模式轮廓参数，写入顺序为轮廓速度、轮廓加速度、轮廓减速度、目标位置 [非实时接口] |
-| 67 | `NrtSetPvTargetVelocity(target_vel_rads, profile_acc_radss, profile_dec_radss)` | 目标速度、轮廓加速度、轮廓减速度 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | PV 模式：通过 SDO 写入 0x21/0x03、0x21/0x08、0x21/0x09 [非实时接口] |
+| 67 | `NrtSetPvTargetVelocity(target_vel_rads, acc_radss)` | 目标速度、轮廓加速度/减速度 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | PV 模式：通过 SDO 写入 0x21/0x08、0x21/0x09、0x21/0x03，目标速度最后写入 [非实时接口] |
 | 68 | `NrtSetPtTargetCurrent(target_cur_a, current_slope_as)` | 目标转矩电流、电流斜率 | `int` — CanEvoError::kOk 成功；kNotInitialized 未初始化 | PT 模式：通过 SDO 写入 0x21/0x04、0x21/0x06 [非实时接口] |
 
 ### 5.12 SDO 关节实际状态（阻塞，Index 0x20，只读）
@@ -444,6 +446,7 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 | RxPDO1 | 0x240 + node_id | controlword(u16) + 目标速度(float, rpm) | 8B |
 | RxPDO2 | 0x280 + node_id | controlword(u16) + 目标电流(float, A) | 8B |
 | RxPDO3 | 0x2C0 + node_id | controlword(u16) + 目标位置(float) + 轮廓速度(float) + 轮廓加速(float) + 轮廓减速(float) | 20B |
+| RxPDO4 | 0x300 + node_id | controlword(u16) + 目标速度(float) + 轮廓加速(float) + 轮廓减速(float) | 16B |
 
 ### 6.2 TxPDO（从站 → 主站，状态反馈）
 

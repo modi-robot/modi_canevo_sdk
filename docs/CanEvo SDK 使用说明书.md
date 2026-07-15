@@ -210,6 +210,7 @@ cat /sys/devices/platform/bus@0/c310000.mttcan/net/can0/tdc_offset
 | --- | --- | --- | --- | --- |
 | `example_single_joint_sdo` | `example_single_joint/example_sdo.cpp` | 无运动 | SDO | 扫描关节、读取设备信息和状态 |
 | `example_single_joint_csv` | `example_single_joint/example_csv.cpp` | CSV | PDO 目标速度 | 单关节在位置范围内按速度往复 |
+| `example_single_joint_pv` | `example_single_joint/example_pv.cpp` | PV | PDO4 目标速度 | 单关节通过轮廓速度模式往复 |
 | `example_single_joint_csp` | `example_single_joint/example_csp.cpp` | CSP | PDO 目标位置 | 单关节周期同步位置控制 |
 | `example_single_joint_cst` | `example_single_joint/example_cst.cpp` | CST | PDO 目标电流 | 单关节电流模式测试，默认 0 A |
 | `example_single_joint_nrt_pp` | `example_single_joint/example_nrt_pp.cpp` | PP | SDO 目标位置 | 通过 SDO 下发 PP 目标，适合验证非实时 PP |
@@ -220,6 +221,7 @@ cat /sys/devices/platform/bus@0/c310000.mttcan/net/can0/tdc_offset
 
 ```bash
 sudo ./example_single_joint_csv 2
+sudo ./example_single_joint_pv 2
 sudo ./example_single_joint_rt_pp 1
 sudo ./example_single_joint_nrt_pp 1
 ```
@@ -348,6 +350,7 @@ build/logs/canevo_can.YYYYMMDD_HHMMSS.log
 | RxPDO1 / CSV 目标速度 | `0x240 + node_id` | `0x241` | `0x242` |
 | RxPDO2 / CST 目标电流 | `0x280 + node_id` | `0x281` | `0x282` |
 | RxPDO3 / PP 目标位置 | `0x2C0 + node_id` | `0x2C1` | `0x2C2` |
+| RxPDO4 / PV 目标速度 | `0x300 + node_id` | `0x301` | `0x302` |
 | TxPDO0 / 状态反馈 | `0x400 + node_id` | `0x401` | `0x402` |
 | SDO 请求 | `0x780 + node_id` | `0x781` | `0x782` |
 | SDO 响应 | `0x7C0 + node_id` | `0x7C1` | `0x7C2` |
