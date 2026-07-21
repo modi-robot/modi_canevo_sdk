@@ -45,47 +45,6 @@ struct CanFrame {
 };
 
 /* ============================================================
- * 带互斥锁的环形队列（多生产者安全，用于 EMCY 等低频场景）
- * ============================================================ */
-
-template <typename T>
-class RingQueue {
- public:
-
-  explicit RingQueue(uint32_t capacity)
-      : buf_(capacity), mask_(capacity - 1), capacity_(capacity) {}
-
-  bool push(const T& item) {
-    std::lock_guard<std::mutex> lk(mu_);
-    uint32_t next = (write_ + 1) & mask_;
-    if (next == read_) {
-      // 覆盖最旧
-      read_ = (read_ + 1) & mask_;
-    }
-    buf_[write_] = item;
-    write_ = next;
-    return true;
-  }
-
-  bool pop(T& item) {
-    std::lock_guard<std::mutex> lk(mu_);
-    if (read_ == write_) return false;
-    item = buf_[read_];
-    read_ = (read_ + 1) & mask_;
-    return true;
-  }
-
- private:
-
-  std::vector<T> buf_;
-  uint32_t mask_;
-  uint32_t capacity_;
-  uint32_t write_ = 0;
-  uint32_t read_ = 0;
-  std::mutex mu_;
-};
-
-/* ============================================================
  * 协议常量
  * ============================================================ */
 
@@ -310,6 +269,7 @@ class modi_joint_canevo::Impl {
   uint16_t GetStatusword();
   uint32_t StatusSeq() const;
   bool GetEmcy(uint16_t& out_fault);
+  void ClearEmcy();
 
   /* ---- SDO 阻塞读写 ---- */
   int SdoRead(uint8_t index, uint8_t sub, uint8_t* out, uint8_t out_len,
@@ -376,8 +336,9 @@ class modi_joint_canevo::Impl {
   std::atomic<float> pcb_temp_c_cache_{0.0f};
   std::atomic<float> motor_temp_c_cache_{0.0f};
 
-  /* EMCY 队列 */
-  canevo::RingQueue<uint16_t> emcy_q_{16};
+  /* 最新 EMCY 状态缓存；周期读取不会消费。 */
+  std::atomic<uint16_t> latest_emcy_code_{0};
+  std::atomic<bool> emcy_valid_{false};
 
   /* 内部帧处理 */
   void OnSdoResp(const canevo::CanFrame& f);

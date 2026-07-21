@@ -363,6 +363,8 @@ int modi_joint_canevo::Impl::Init(modi_bus_canevo::Impl* bus, uint8_t node_id) {
   fault_clr_pending_.store(false, std::memory_order_relaxed);
   status_valid_.store(false, std::memory_order_relaxed);
   status_seq_.store(0, std::memory_order_relaxed);
+  latest_emcy_code_.store(0, std::memory_order_relaxed);
+  emcy_valid_.store(false, std::memory_order_relaxed);
   return static_cast<int>(CanEvoError::kOk);
 }
 
@@ -384,6 +386,8 @@ void modi_joint_canevo::Impl::Shutdown() {
   bus_voltage_v_cache_.store(0.0f, std::memory_order_relaxed);
   pcb_temp_c_cache_.store(0.0f, std::memory_order_relaxed);
   motor_temp_c_cache_.store(0.0f, std::memory_order_relaxed);
+  latest_emcy_code_.store(0, std::memory_order_relaxed);
+  emcy_valid_.store(false, std::memory_order_relaxed);
 }
 
 /* ============================================================
@@ -592,7 +596,14 @@ uint32_t modi_joint_canevo::Impl::StatusSeq() const {
 }
 
 bool modi_joint_canevo::Impl::GetEmcy(uint16_t& out_fault) {
-  return emcy_q_.pop(out_fault);
+  if (!emcy_valid_.load(std::memory_order_acquire)) return false;
+  out_fault = latest_emcy_code_.load(std::memory_order_acquire);
+  return true;
+}
+
+void modi_joint_canevo::Impl::ClearEmcy() {
+  latest_emcy_code_.store(0, std::memory_order_relaxed);
+  emcy_valid_.store(true, std::memory_order_release);
 }
 
 /* ============================================================
@@ -872,6 +883,6 @@ void modi_joint_canevo::Impl::OnTxPdo1(const CanFrame& f) {
 
 void modi_joint_canevo::Impl::OnEmcy(const CanFrame& f) {
   if (f.len < 2) return;
-  uint16_t fault = ReadU16LE(f.data);
-  emcy_q_.push(fault);
+  latest_emcy_code_.store(ReadU16LE(f.data), std::memory_order_relaxed);
+  emcy_valid_.store(true, std::memory_order_release);
 }

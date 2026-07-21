@@ -406,9 +406,11 @@ class modi_joint_canevo {
   int RtGetJointStatus(JointStatus& out);
 
   /**
-   * @brief 获取最新 EMCY 故障码（非阻塞，从 EMCY 队列消费） [实时接口]
+   * @brief 获取最新 EMCY 故障码（非阻塞、非消费式缓存读取） [实时接口]
    * @param[out] out_fault 输出故障码枚举
-   * @return true 有新的 EMCY 报文，false 无
+   * @return true 已收到过 EMCY 状态，false 尚未收到 EMCY 状态
+   * @note 可周期调用；重复读取不会清除状态。收到 0x0000 或清故障成功后
+   * 返回 CanEvoFault::kNone。
    */
   bool RtGetEmcy(CanEvoFault& out_fault);
 
@@ -430,6 +432,13 @@ class modi_joint_canevo {
    */
   int RtClearEstop();
 
+  /**
+   * @brief 修改控制字缓存中的工作模式（bit12~bit15）[实时接口]
+   * @param mode 目标工作模式
+   * @note 非阻塞；新模式随下一帧 RxPDO 发送到关节，不改变使能位。
+   * @return CanEvoError::kOk 成功，kNotInitialized 未初始化
+   */
+  int RtSetControlMode(const CanEvoMode mode);
   /* ============================================================
    * SDO 控制字操作（阻塞，通过 SDO 直接修改 0x21/0x00）
    * ============================================================

@@ -12,7 +12,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
-#include <iostream>
+#include <spdlog/spdlog.h>
 #include <thread>
 
 #include "canevo_impl.h"
@@ -78,8 +78,8 @@ int modi_joint_canevo::NrtInit(modi_bus_canevo& bus, const uint8_t node_id) {
         static_cast<uint16_t>(bus.impl_->GetTaskConfig().sync_period_us);
     int sync_ret = impl_->SetSyncPeriod(sync_period_us);
     if (sync_ret != static_cast<int>(CanEvoError::kOk)) {
-      std::cerr << "警告: 无法设置关节同步周期 (node_id=" << (int)node_id
-                << ", errno=" << sync_ret << ")" << std::endl;
+      spdlog::warn("无法设置关节同步周期 (node_id={}, errno={})",
+                   static_cast<int>(node_id), sync_ret);
       return sync_ret;
     }
   }
@@ -193,6 +193,13 @@ int modi_joint_canevo::RtClearEstop() {
   return static_cast<int>(CanEvoError::kOk);
 }
 
+int modi_joint_canevo::RtSetControlMode(const CanEvoMode mode) {
+  if (!impl_->isInitialized())
+    return static_cast<int>(CanEvoError::kNotInitialized);
+  impl_->SetMode(mode);
+  return static_cast<int>(CanEvoError::kOk);
+}
+
 /* ============================================================
  * SDO 控制字操作（阻塞，通过 SDO 直接修改 0x21/0x00）
  * ============================================================
@@ -247,7 +254,11 @@ int modi_joint_canevo::NrtClearFault() {
   // 短延时后清零 bit0
   std::this_thread::sleep_for(std::chrono::milliseconds(2));
   cw = static_cast<uint16_t>(cw & ~0x0001);
-  return impl_->sdoWriteU16(0x21, 0x00, cw);
+  ret = impl_->sdoWriteU16(0x21, 0x00, cw);
+  if (ret == static_cast<int>(CanEvoError::kOk)) {
+    impl_->ClearEmcy();
+  }
+  return ret;
 }
 
 int modi_joint_canevo::NrtEstop() {

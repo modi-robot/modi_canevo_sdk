@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.14)
 project(canevo_sdk_x86 LANGUAGES CXX)
 
+find_package(spdlog REQUIRED)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(CMakePackageConfigHelpers)
@@ -49,7 +51,7 @@ target_include_directories(canevo_sdk_x86
 )
 
 target_link_libraries(canevo_sdk_x86
-    PRIVATE pthread
+    PRIVATE pthread spdlog::spdlog
 )
 
 canevo_sdk_enable_necro(canevo_sdk_x86)

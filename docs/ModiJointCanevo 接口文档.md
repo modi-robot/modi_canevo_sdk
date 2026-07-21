@@ -293,7 +293,7 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
 | 13 | `RtGetJointStatus(out)` | `out`: [out] 输出状态结构体（JointStatus&） | `int` — CanEvoError::kOk 成功（有新数据）；kNotInitialized 未初始化 | 获取最新关节状态，从 TxPDO0/TxPDO1 缓存读取 [实时接口] |
-| 14 | `RtGetEmcy(out_fault)` | `out_fault`: [out] 输出故障码枚举（CanEvoFault&） | `bool` — true: 有新的 EMCY 报文；false: 无 | 获取最新 EMCY 故障码，从 EMCY 队列消费。EMCY 是事件驱动的实时通知（cob_id = 0x80 + node_id） [实时接口] |
+| 14 | `RtGetEmcy(out_fault)` | `out_fault`: [out] 输出故障码枚举（CanEvoFault&） | `bool` — true: 已收到过 EMCY 状态；false: 尚未收到 | 非消费式读取最新 EMCY 状态缓存，可周期调用。收到 0x0000 或清故障成功后返回 kNone（cob_id = 0x80 + node_id） [实时接口] |
 
 ### 5.4 控制字控制（非阻塞）
 
@@ -630,7 +630,7 @@ int main() {
 4. **SYNC 广播**：控制线程内部每个周期自动发送一次 SYNC，counter 0~255 循环递增。SYNC 使用独立 socket fd 发送，避免与 PDO 争抢锁。
 
 5. **故障检测**：有两种方式获取故障信息：
-   - `RtGetEmcy()`：非阻塞，从 EMCY 队列消费，适用于实时循环中的事件驱动检测
+   - `RtGetEmcy()`：非阻塞、非消费式读取最新 EMCY 缓存，适用于实时循环中的周期状态查询
    - `NrtGetFaultCode()`：SDO 阻塞轮询，适用于非实时的诊断查询
 
 6. **单位转换**：所有面向用户的位置/速度/加速度接口均使用 rad 系单位，SDK 内部自动完成与协议层 deg / rpm 的转换。

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <iostream>
+#include <spdlog/spdlog.h>
 
 #ifndef CANEVO_HAVE_NECRO
 #define CANEVO_HAVE_NECRO 0
@@ -28,6 +28,6 @@ inline void LogCanevoHardRealtimeOnce() {
     return;
   }
   logged = true;
-  std::cerr << "[CanEvo SDK] NIIC hard realtime: " << CanevoHardRealtimeStatus()
-            << std::endl;
+  spdlog::info("[CanEvo SDK] NIIC hard realtime: {}",
+               CanevoHardRealtimeStatus());
 }
