@@ -6,7 +6,11 @@ find_package(spdlog REQUIRED)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(CMakePackageConfigHelpers)
-set(CANEVO_SDK_VERSION "0.1.0")
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/version" CANEVO_SDK_VERSION LIMIT_COUNT 1)
+string(STRIP "${CANEVO_SDK_VERSION}" CANEVO_SDK_VERSION)
+if(NOT CANEVO_SDK_VERSION)
+  message(FATAL_ERROR "SDK version file is empty: ${CMAKE_CURRENT_SOURCE_DIR}/version")
+endif()
 set(CANEVO_EXAMPLE_SOURCE_BUILD OFF CACHE BOOL "Build examples with source target instead of find_package")
 option(CANEVO_BUILD_EXAMPLES "Build CanEvo SDK examples" ON)
 
@@ -149,21 +153,34 @@ install(FILES
 
 # ---- 打包（生成 make package 目标）----
 if(_canevo_sdk_top_level)
-set(CPACK_PACKAGE_NAME "${PROJECT_NAME}")
+set(CPACK_PACKAGE_NAME "modi_sdk")
 set(CPACK_PACKAGE_VERSION "${CANEVO_SDK_VERSION}")
 set(CPACK_PACKAGE_VENDOR "modi")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "canevo sdk for x86")
 set(CPACK_GENERATOR "ZIP")
 execute_process(
-  COMMAND git rev-parse --short=8 HEAD
+  COMMAND git rev-parse --short HEAD
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   OUTPUT_VARIABLE GIT_COMMIT_SHORT
   OUTPUT_STRIP_TRAILING_WHITESPACE
   ERROR_QUIET
 )
 if(NOT GIT_COMMIT_SHORT)
-  set(GIT_COMMIT_SHORT "nogit")
+  set(GIT_COMMIT_SHORT "unknown")
 endif()
-set(CPACK_PACKAGE_FILE_NAME "canevo_sdk-${CPACK_PACKAGE_VERSION}-${GIT_COMMIT_SHORT}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
+
+string(TOLOWER "${CMAKE_SYSTEM_NAME}" CANEVO_PACKAGE_PLATFORM)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+  set(CANEVO_PACKAGE_ARCH "arm64")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+  set(CANEVO_PACKAGE_ARCH "x86_64")
+else()
+  set(CANEVO_PACKAGE_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+
+# Keep the standalone SDK artifact naming aligned with package_modi_release.sh:
+# modi_sdk_<version>_<platform>_<arch>_<commit>.zip
+set(CPACK_PACKAGE_FILE_NAME
+    "modi_sdk_${CPACK_PACKAGE_VERSION}_${CANEVO_PACKAGE_PLATFORM}_${CANEVO_PACKAGE_ARCH}_${GIT_COMMIT_SHORT}")
 include(CPack)
 endif()
