@@ -52,10 +52,12 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(canevo_sdk_x86 CONFIG REQUIRED)
+find_package(Threads REQUIRED)
 
 add_executable(canevo_first_app main.cpp)
 target_link_libraries(canevo_first_app PRIVATE
     canevo_sdk_x86::canevo_sdk_x86
+    Threads::Threads
 )
 ```
 
@@ -321,7 +323,224 @@ sudo ./build/canevo_first_app can1
 
 程序在成功、超时和错误路径中都会执行清理逻辑：先调用 `NrtDisable()`，再调用 `NrtDestroy()`，最后调用 `bus.Close()`。
 
-## 6. 常用接口调用顺序
+## 6. 创建实时线程
+
+CSP、CSV 和 CST 等固定周期控制应在实时线程中执行。建议先运行包内的纯实时线程示例，确认线程能够使用 `SCHED_FIFO` 并绑定到指定 CPU：
+
+```bash
+cd "${SDK_ROOT}/example"
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target example_single_joint_rt_thread \
+  --parallel "$(nproc)"
+sudo ./build/example_single_joint_rt_thread
+```
+
+完整源码位于：
+
+```text
+example/example_single_joint/example_rt_thread.cpp
+```
+
+### 6.1 实时线程的基本配置
+
+创建 POSIX 实时线程时需要完成以下配置：
+
+```cpp
+#include <pthread.h>
+#include <sched.h>
+#include <sys/mman.h>
+#include <time.h>
+
+constexpr int kRealtimeCpu = 1;
+constexpr int kRealtimePriority = 99;
+
+// 锁定当前和后续分配的内存，避免实时循环发生换页。
+if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+  std::cerr << "mlockall 失败" << std::endl;
+  return 1;
+}
+
+pthread_attr_t attr;
+pthread_attr_init(&attr);
+pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
+pthread_attr_setschedpolicy(&attr, SCHED_FIFO);
+
+sched_param param{};
+param.sched_priority = kRealtimePriority;
+pthread_attr_setschedparam(&attr, &param);
+
+cpu_set_t cpuset;
+CPU_ZERO(&cpuset);
+CPU_SET(kRealtimeCpu, &cpuset);
+pthread_attr_setaffinity_np(&attr, sizeof(cpuset), &cpuset);
+
+pthread_t rt_thread{};
+const int ret = pthread_create(&rt_thread, &attr, RtLoop, nullptr);
+pthread_attr_destroy(&attr);
+if (ret != 0) {
+  std::cerr << "创建实时线程失败, errno=" << ret << std::endl;
+  return 1;
+}
+
+pthread_join(rt_thread, nullptr);
+```
+
+其中 `RtLoop` 是实时线程入口函数。`CPU1` 只是本文采用的配置，运行前应确认该 CPU 在线，并且与系统实际隔离核一致：
+
+```bash
+cat /sys/devices/system/cpu/online
+cat /sys/devices/system/cpu/isolated
+```
+
+`SCHED_FIFO 99` 和 `mlockall()` 通常需要 root 或相应实时调度权限，因此示例使用 `sudo` 运行。
+
+### 6.2 固定周期循环
+
+固定周期循环应使用 `CLOCK_MONOTONIC` 和绝对时间唤醒，避免每周期误差不断累积：
+
+```cpp
+timespec AddNs(timespec value, long ns) {
+  value.tv_nsec += ns;
+  while (value.tv_nsec >= 1000000000L) {
+    value.tv_nsec -= 1000000000L;
+    ++value.tv_sec;
+  }
+  return value;
+}
+
+void* RtLoop(void*) {
+  constexpr long kPeriodNs = 5'000'000L;  // 5 ms
+  timespec next_wakeup{};
+  clock_gettime(CLOCK_MONOTONIC, &next_wakeup);
+
+  while (g_running.load(std::memory_order_acquire)) {
+    next_wakeup = AddNs(next_wakeup, kPeriodNs);
+    const int ret = clock_nanosleep(
+        CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, nullptr);
+    if (ret != 0) {
+      break;
+    }
+
+    // 在这里执行一次固定周期控制。
+  }
+  return nullptr;
+}
+```
+
+实时循环中不要打印日志、写文件、动态分配内存或调用可能阻塞的 `Nrt` 接口。状态记录可写入预先分配的内存，退出实时线程后再由普通线程输出。
+
+## 7. CSP 实时位置控制
+
+CSP 模式由应用程序按照固定周期持续发送目标位置。与 PP 不同，CSP 不能只发送一次目标后等待，必须在每个同步周期调用 `RtStepOnce()` 并更新目标。
+
+完整可运行示例位于：
+
+```text
+example/example_single_joint/example_csp.cpp
+```
+
+编译并运行：
+
+```bash
+cd "${SDK_ROOT}/example"
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target example_single_joint_csp \
+  --parallel "$(nproc)"
+sudo ./build/example_single_joint_csp
+```
+
+### 7.1 主线程初始化顺序
+
+主线程负责所有可能阻塞的初始化操作：
+
+```cpp
+TaskConfig task_config;
+task_config.sync_period_us = 5000;
+task_config.cpu_affinity = 3;   // SDK Rx 线程使用非隔离 CPU
+task_config.sched_policy = SCHED_FIFO;
+task_config.sched_priority = 90;
+
+modi_bus_canevo bus;
+modi_joint_canevo joint;
+
+bus.Open("can0", task_config);
+const auto joint_ids = bus.NrtScanJoints();
+joint.NrtInit(bus, joint_ids.front());
+
+if (joint.NrtGetFaultCode() != CanEvoFault::kNone) {
+  joint.NrtClearFault();
+}
+
+joint.NrtEnable(CanEvoMode::kCsp);
+```
+
+实际程序必须检查每个接口的返回值，并等待：
+
+```text
+NrtGetServoState() == CanEvoServoState::kRunning
+NrtGetCurrentMode() == CanEvoMode::kCsp
+```
+
+确认模式切换完成后再创建实时线程。完整的错误处理与等待逻辑请直接参考 `example_csp.cpp`。
+
+### 7.2 CSP 实时循环
+
+实时线程每周期执行以下顺序：
+
+```cpp
+void* RtLoop(void*) {
+  timespec next_wakeup{};
+  clock_gettime(CLOCK_MONOTONIC, &next_wakeup);
+
+  const long period_ns = g_period_us * 1000L;
+  float target_position = g_joint->NrtGetActualPosition();
+  float step = 0.02f * 3.1415926f / 180.0f;
+
+  while (g_running.load(std::memory_order_acquire)) {
+    next_wakeup = AddNs(next_wakeup, period_ns);
+    if (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME,
+                        &next_wakeup, nullptr) != 0) {
+      break;
+    }
+
+    // 必须每周期调用一次，完成同步帧发送和实时缓存更新。
+    if (g_bus->RtStepOnce() != static_cast<int>(CanEvoError::kOk)) {
+      break;
+    }
+
+    if (g_joint->RtGetServoState() == CanEvoServoState::kFault) {
+      break;
+    }
+    if (g_joint->RtGetCurrentMode() != CanEvoMode::kCsp) {
+      break;
+    }
+
+    target_position += step;
+    if (g_joint->RtSetCspTargetPosition(target_position) !=
+        static_cast<int>(CanEvoError::kOk)) {
+      break;
+    }
+  }
+  return nullptr;
+}
+```
+
+这里使用全局指针只是为了突出调用顺序。业务程序可以将总线、关节和退出状态封装到上下文结构体中，通过 `pthread_create()` 的参数传入实时线程。
+
+### 7.3 CSP 退出顺序
+
+退出时需要主线程和实时线程配合，推荐顺序：
+
+1. 主线程收到 `SIGINT` 或业务停止请求。
+2. 调用 `NrtDisable()` 失能关节。
+3. 让实时循环短暂保持周期通信，完成失能状态切换。
+4. 设置实时线程退出标志并调用 `pthread_join()`。
+5. 调用 `NrtDestroy()`。
+6. 调用 `bus.Close()`。
+
+不要直接结束进程或先关闭 CAN 总线，否则关节可能来不及收到失能指令。
+
+## 8. 常用接口调用顺序
 
 | 阶段 | 接口 | 说明 |
 | --- | --- | --- |
@@ -336,13 +555,13 @@ sudo ./build/canevo_first_app can1
 | 安全停止 | `joint.NrtDisable()` | 停止运动并失能关节 |
 | 释放资源 | `joint.NrtDestroy()`、`bus.Close()` | 注销关节并关闭 CAN 总线 |
 
-## 7. NRT 与 RT 接口怎么选择
+## 9. NRT 与 RT 接口怎么选择
 
 - `Nrt` 接口可能发生阻塞，适合初始化、参数配置、状态确认和低频控制。
 - RT/PDO 接口适合固定周期控制循环，不应在实时循环中调用阻塞式 `Nrt` 接口。
 - 初次开发建议先完成 SDO 与 NRT PP 测试，再参考 CSP、CSV、CST 示例编写实时控制程序。
 
-## 8. 下一步参考
+## 10. 下一步参考
 
 - [完整示例源码](../example/)
 - [CanEvo SDK 使用说明书](CanEvo%20SDK%20使用说明书.md)
