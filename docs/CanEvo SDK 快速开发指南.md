@@ -155,44 +155,171 @@ sudo ./build/canevo_first_app can1
 
 ## 5. 增加 PP 位置控制
 
-确认关节无故障且机械环境安全后，可以在资源释放代码之前加入以下逻辑：
+确认关节无故障且机械环境安全后，可以将 `main.cpp` 替换为下面的完整 PP 位置控制程序。程序默认使用 `can0` 和扫描到的第一个关节，也可以通过命令行指定 CAN 接口。
 
 ```cpp
+#include <cmath>
 #include <chrono>
+#include <cstdint>
+#include <iostream>
 #include <thread>
 
-const auto fault = joint.NrtGetFaultCode();
-if (fault != CanEvoFault::kNone) {
-  std::cout << "检测到故障，尝试清除" << std::endl;
-  if (joint.NrtClearFault() != static_cast<int>(CanEvoError::kOk)) {
-    std::cerr << "清除故障失败" << std::endl;
-    joint.NrtDestroy();
+#include "modi_joint_canevo.h"
+
+namespace {
+
+constexpr float kTargetPositionRad = 0.1f;
+constexpr float kProfileVelocityRadS = 0.2f;
+constexpr float kProfileAccelerationRadSS = 0.3f;
+constexpr float kPositionToleranceRad = 0.01f;
+constexpr auto kStateTimeout = std::chrono::seconds(3);
+constexpr auto kMotionTimeout = std::chrono::seconds(10);
+
+bool WaitUntilRunning(modi_joint_canevo& joint) {
+  const auto deadline = std::chrono::steady_clock::now() + kStateTimeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (joint.NrtGetServoState() == CanEvoServoState::kRunning &&
+        joint.NrtGetCurrentMode() == CanEvoMode::kPp) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
+}
+
+}  // namespace
+
+int main(int argc, char* argv[]) {
+  const char* can_ifname = argc > 1 ? argv[1] : "can0";
+
+  // 1. 打开已经配置并启动的 CAN-FD 接口。
+  modi_bus_canevo bus;
+  TaskConfig task_config;
+  task_config.sync_period_us = 5000;
+
+  if (bus.Open(can_ifname, task_config) !=
+      static_cast<int>(CanEvoError::kOk)) {
+    std::cerr << "打开 CAN 接口失败: " << can_ifname << std::endl;
+    return 1;
+  }
+
+  bus.SetSdoTimeoutMs(50);
+  bus.SetPdoTimeoutMs(50);
+
+  // 2. 扫描并选择第一个在线关节。
+  const auto joint_ids = bus.NrtScanJoints();
+  if (joint_ids.empty()) {
+    std::cerr << "未扫描到在线关节" << std::endl;
     bus.Close();
     return 1;
   }
+
+  const uint8_t node_id = joint_ids.front();
+  std::cout << "选择关节 ID: " << static_cast<int>(node_id) << std::endl;
+
+  // 3. 初始化关节对象。
+  modi_joint_canevo joint;
+  if (joint.NrtInit(bus, node_id) != static_cast<int>(CanEvoError::kOk)) {
+    std::cerr << "初始化关节失败" << std::endl;
+    bus.Close();
+    return 1;
+  }
+
+  bool enabled = false;
+  const auto cleanup = [&]() {
+    if (enabled) {
+      joint.NrtDisable();
+    }
+    joint.NrtDestroy();
+    bus.Close();
+  };
+
+  // 4. 检查并尝试清除故障。
+  const auto fault = joint.NrtGetFaultCode();
+  if (fault != CanEvoFault::kNone) {
+    std::cout << "检测到故障，尝试清除，故障码: 0x" << std::hex
+              << static_cast<uint16_t>(fault) << std::dec << std::endl;
+    if (joint.NrtClearFault() != static_cast<int>(CanEvoError::kOk)) {
+      std::cerr << "清除故障失败" << std::endl;
+      cleanup();
+      return 1;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+
+  // 5. 切换到 PP 模式并使能关节。
+  if (joint.NrtEnable(CanEvoMode::kPp) !=
+      static_cast<int>(CanEvoError::kOk)) {
+    std::cerr << "使能 PP 模式失败" << std::endl;
+    cleanup();
+    return 1;
+  }
+  enabled = true;
+
+  if (!WaitUntilRunning(joint)) {
+    std::cerr << "等待关节进入 PP Running 状态超时" << std::endl;
+    cleanup();
+    return 1;
+  }
+
+  // 6. 下发位置、速度和加速度目标。
+  if (joint.NrtSetPpTargetPosition(kTargetPositionRad,
+                                   kProfileVelocityRadS,
+                                   kProfileAccelerationRadSS) !=
+      static_cast<int>(CanEvoError::kOk)) {
+    std::cerr << "下发 PP 目标失败" << std::endl;
+    cleanup();
+    return 1;
+  }
+
+  std::cout << "目标位置: " << kTargetPositionRad << " rad" << std::endl;
+
+  // 7. 等待关节到达目标位置。
+  bool reached = false;
+  const auto deadline = std::chrono::steady_clock::now() + kMotionTimeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (joint.NrtGetServoState() == CanEvoServoState::kFault) {
+      std::cerr << "运动过程中检测到关节故障" << std::endl;
+      break;
+    }
+
+    const float actual_position = joint.NrtGetActualPosition();
+    std::cout << "当前位置: " << actual_position << " rad\r" << std::flush;
+    if (std::fabs(kTargetPositionRad - actual_position) <=
+        kPositionToleranceRad) {
+      reached = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  std::cout << std::endl;
+
+  if (!reached) {
+    std::cerr << "关节未在规定时间内到达目标位置" << std::endl;
+  } else {
+    std::cout << "关节已到达目标位置" << std::endl;
+  }
+
+  // 8. 无论是否到位，都先失能关节，再释放通信资源。
+  cleanup();
+  return reached ? 0 : 1;
 }
-
-if (joint.NrtEnable(CanEvoMode::kPp) !=
-    static_cast<int>(CanEvoError::kOk)) {
-  std::cerr << "使能 PP 模式失败" << std::endl;
-  joint.NrtDestroy();
-  bus.Close();
-  return 1;
-}
-
-// 目标位置 0.1 rad、速度 0.2 rad/s、加速度 0.3 rad/s²。
-if (joint.NrtSetPpTargetPosition(0.1f, 0.2f, 0.3f) !=
-    static_cast<int>(CanEvoError::kOk)) {
-  std::cerr << "下发 PP 目标失败" << std::endl;
-}
-
-std::this_thread::sleep_for(std::chrono::seconds(2));
-std::cout << "当前位置(rad): " << joint.NrtGetActualPosition() << std::endl;
-
-joint.NrtDisable();
 ```
 
-运动程序退出前必须调用 `NrtDisable()`，随后调用 `NrtDestroy()`，最后关闭总线。
+重新编译并运行：
+
+```bash
+cmake --build build --parallel "$(nproc)"
+sudo ./build/canevo_first_app can0
+```
+
+使用其他 CAN 接口时，将最后一个参数改为实际接口名，例如：
+
+```bash
+sudo ./build/canevo_first_app can1
+```
+
+程序在成功、超时和错误路径中都会执行清理逻辑：先调用 `NrtDisable()`，再调用 `NrtDestroy()`，最后调用 `bus.Close()`。
 
 ## 6. 常用接口调用顺序
 
