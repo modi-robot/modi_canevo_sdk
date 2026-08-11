@@ -7,7 +7,7 @@ BUILD_DIR="${BUILD_DIR:-${REPO_ROOT}/build}"
 DIST_DIR="${DIST_DIR:-${BUILD_DIR}/dist}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 BUILD_WORKERS="${BUILD_WORKERS:-$(nproc)}"
-CHANGELOG_FILE="${DIST_DIR}/modi_sdk_CHANGELOG.md"
+CHANGELOG_FILE="${DIST_DIR}/modi_canevo_sdk_CHANGELOG.md"
 RELEASE_REMOTE="${RELEASE_REMOTE:-origin}"
 TEMP_DIR=""
 
@@ -81,7 +81,7 @@ if [[ ! -f "${SOURCE_ARCHIVE}" ]]; then
 fi
 
 echo "[5/6] Adding changelog and staging artifacts..."
-TEMP_DIR="$(mktemp -d /tmp/modi_sdk_package.XXXXXX)"
+TEMP_DIR="$(mktemp -d /tmp/modi_canevo_sdk_package.XXXXXX)"
 unzip -q "${SOURCE_ARCHIVE}" -d "${TEMP_DIR}"
 
 if [[ -d "${TEMP_DIR}/${PACKAGE_BASENAME}" ]]; then

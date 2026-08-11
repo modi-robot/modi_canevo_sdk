@@ -157,7 +157,7 @@ install(FILES
 
 # ---- 打包（生成 make package 目标）----
 if(_canevo_sdk_top_level)
-set(CPACK_PACKAGE_NAME "modi_sdk")
+set(CPACK_PACKAGE_NAME "modi_canevo_sdk")
 set(CPACK_PACKAGE_VERSION "${CANEVO_SDK_VERSION}")
 set(CPACK_PACKAGE_VENDOR "modi")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "canevo sdk for x86")
@@ -183,8 +183,8 @@ else()
 endif()
 
 # Keep the standalone SDK artifact naming aligned with package_modi_release.sh:
-# modi_sdk_<version>_<platform>_<arch>_<commit>.zip
+# modi_canevo_sdk_<version>_<platform>_<arch>_<commit>.zip
 set(CPACK_PACKAGE_FILE_NAME
-    "modi_sdk_${CPACK_PACKAGE_VERSION}_${CANEVO_PACKAGE_PLATFORM}_${CANEVO_PACKAGE_ARCH}_${GIT_COMMIT_SHORT}")
+    "modi_canevo_sdk_${CPACK_PACKAGE_VERSION}_${CANEVO_PACKAGE_PLATFORM}_${CANEVO_PACKAGE_ARCH}_${GIT_COMMIT_SHORT}")
 include(CPack)
 endif()

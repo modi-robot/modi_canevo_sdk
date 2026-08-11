@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 OUTPUT_FILE="${1:-${REPO_ROOT}/CHANGELOG.md}"
 MAX_COUNT="${MAX_COUNT:-50}"
-PACKAGE_NAME="${PACKAGE_NAME:-modi_sdk}"
+PACKAGE_NAME="${PACKAGE_NAME:-modi_canevo_sdk}"
 
 if [[ ! "${MAX_COUNT}" =~ ^[1-9][0-9]*$ ]]; then
   echo "error: MAX_COUNT must be a positive integer" >&2

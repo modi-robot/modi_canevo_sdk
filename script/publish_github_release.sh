@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DIST_DIR="${DIST_DIR:-${REPO_ROOT}/build/dist}"
 GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-modi-robot/modi_canevo_sdk}"
 GITHUB_GIT_URL="${GITHUB_GIT_URL:-https://github.com/${GITHUB_REPOSITORY}.git}"
-CHANGELOG_FILE="${DIST_DIR}/modi_sdk_CHANGELOG.md"
+CHANGELOG_FILE="${DIST_DIR}/modi_canevo_sdk_CHANGELOG.md"
 
 if ! command -v gh >/dev/null 2>&1; then
   echo "error: GitHub CLI (gh) is required" >&2
@@ -41,7 +41,7 @@ if [[ ! -f "${CHANGELOG_FILE}" ]]; then
 fi
 
 shopt -s nullglob
-ZIP_FILES=("${DIST_DIR}/modi_sdk_${VERSION}_"*.zip)
+ZIP_FILES=("${DIST_DIR}/modi_canevo_sdk_${VERSION}_"*.zip)
 shopt -u nullglob
 if [[ "${#ZIP_FILES[@]}" -ne 1 ]]; then
   echo "error: expected exactly one SDK ${VERSION} zip in ${DIST_DIR}, found ${#ZIP_FILES[@]}" >&2
