@@ -105,20 +105,20 @@ SDK 软件包可从 GitHub Releases 下载：
 在 Releases 页面选择所需版本，并下载与目标机器平台、架构匹配的 ZIP 文件。文件名格式为：
 
 ```text
-modi_sdk_<版本>_<平台>_<架构>_<Git短提交>.zip
+modi_canevo_sdk_<版本>_<平台>_<架构>_<Git短提交>.zip
 ```
 
 各字段之间使用下划线 `_` 分隔。例如版本 `0.0.1`、Linux x86_64 平台的产物为：
 
 ```text
-modi_sdk_0.0.1_linux_x86_64_8f73bfb.zip
+modi_canevo_sdk_0.0.1_linux_x86_64_8f73bfb.zip
 ```
 
 将 ZIP 文件复制到目标机器的工作目录。以下命令查找当前目录中的 Linux x86_64 SDK 包，解压后进入对应目录：
 
 ```bash
 SDK_ARCHIVE="$(find . -maxdepth 1 -type f \
-  -name 'modi_sdk_*_linux_x86_64_*.zip' -print -quit)"
+  -name 'modi_canevo_sdk_*_linux_x86_64_*.zip' -print -quit)"
 
 if [[ -z "${SDK_ARCHIVE}" ]]; then
   echo "未找到 Linux x86_64 SDK 压缩包" >&2
@@ -133,7 +133,7 @@ cd "${SDK_ROOT}"
 解压后的目录名与 ZIP 文件名一致（不含 `.zip` 后缀），典型结构如下：
 
 ```text
-modi_sdk_<版本>_<平台>_<架构>_<Git短提交>/
+modi_canevo_sdk_<版本>_<平台>_<架构>_<Git短提交>/
 ├── include/                 # SDK 头文件
 ├── lib/                     # SDK 动态库
 │   ├── libcanevo_sdk_x86.so
@@ -148,7 +148,7 @@ modi_sdk_<版本>_<平台>_<架构>_<Git短提交>/
 本文后续使用 `SDK_ROOT` 表示这个解压后的顶层目录。例如将 `0.0.1` 发布包解压到用户主目录后，可执行：
 
 ```bash
-export SDK_ROOT="$HOME/modi_sdk_0.0.1_linux_x86_64_8f73bfb"
+export SDK_ROOT="$HOME/modi_canevo_sdk_0.0.1_linux_x86_64_8f73bfb"
 ```
 
 如果下载的版本或 Git 短提交不同，请按实际解压目录名修改。可用下面的命令确认路径正确：
