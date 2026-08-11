@@ -1,6 +1,6 @@
 # CanEvo SDK
 
-CanEvo SDK 是面向 MODI CanEvo 关节的 Linux x86_64 C++ SDK，基于 SocketCAN 提供关节发现、参数读写、状态查询和运动控制能力。
+CanEvo SDK 是面向 MODI CanEvo 关节的 Linux C++ SDK，支持 x86_64 和 ARM 架构，基于 SocketCAN 提供关节发现、参数读写、状态查询和运动控制能力。
 
 SDK 发布包包含预编译动态库、C++ 头文件、CMake 配置、示例程序源码和配套文档。用户无需编译 SDK 源码，只需下载发布包、配置 CAN-FD 接口并编译示例程序即可开始使用。
 
@@ -15,7 +15,8 @@ SDK 发布包包含预编译动态库、C++ 头文件、CMake 配置、示例程
 
 ## 支持环境
 
-- 操作系统：Linux x86_64
+- 操作系统：Linux
+- 处理器架构：x86_64、ARM64（aarch64）
 - CAN 接口：SocketCAN
 - 推荐 CAN-FD 配置：仲裁段 1 Mbps、数据段 5 Mbps
 - 推荐适配器：KH-UCANFD
@@ -33,11 +34,14 @@ SDK 发布包包含预编译动态库、C++ 头文件、CMake 配置、示例程
 modi_sdk_<版本>_<平台>_<架构>_<Git短提交>.zip
 ```
 
-例如：
+例如，x86_64 和 ARM64 发布包可能分别为：
 
 ```text
 modi_sdk_0.0.1_linux_x86_64_8f73bfb.zip
+modi_sdk_0.0.1_linux_aarch64_8f73bfb.zip
 ```
+
+请根据目标机器的处理器架构选择对应发布包，可通过 `uname -m` 查看当前架构。
 
 ## 快速开始
 
@@ -53,10 +57,13 @@ KH-UCANFD 驱动的安装方法请参见[使用说明书：安装 KH-UCANFD 驱�
 ### 2. 下载并解压发布包
 
 ```bash
-unzip modi_sdk_*_linux_x86_64_*.zip
-cd modi_sdk_*_linux_x86_64_*
+uname -m
+unzip modi_sdk_*_linux_*.zip
+cd modi_sdk_*_linux_*
 export SDK_ROOT="$PWD"
 ```
+
+如果当前目录中有多个架构或版本的压缩包，请将通配符替换为实际下载的完整文件名和解压目录名。
 
 ### 3. 配置 CAN-FD 接口
 
