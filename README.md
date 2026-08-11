@@ -21,6 +21,8 @@
   ·
   <a href="docs/CanEvo%20SDK%20使用说明书.md"><strong>使用说明</strong></a>
   ·
+  <a href="docs/CanEvo%20SDK%20快速开发指南.md"><strong>快速开发</strong></a>
+  ·
   <a href="docs/ModiJointCanevo%20接口文档.md"><strong>接口文档</strong></a>
   ·
   <a href="docs/CanEvo关节通信协议_V1.2.4.md"><strong>通信协议</strong></a>
@@ -126,6 +128,7 @@ cmake --build build --parallel "$(nproc)"
 | 文档 | 内容 |
 | --- | --- |
 | [CanEvo SDK 使用说明书](docs/CanEvo%20SDK%20使用说明书.md) | 环境准备、驱动安装、示例编译运行、抓包和常见问题 |
+| [CanEvo SDK 快速开发指南](docs/CanEvo%20SDK%20快速开发指南.md) | 从零创建工程，完成关节扫描、状态读取和 PP 控制 |
 | [ModiJointCanevo 接口文档](docs/ModiJointCanevo%20接口文档.md) | 数据类型、C++ API、PDO 映射、对象字典和典型用法 |
 | [CanEvo 关节通信协议](docs/CanEvo关节通信协议_V1.2.4.md) | CAN-FD 通信协议和报文定义 |
 | [CanEvo 实时系统配置指南](docs/CanEvo实时系统配置指南.md) | PREEMPT_RT、CPU 隔离和 IRQ 亲和性配置 |
