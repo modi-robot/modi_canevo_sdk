@@ -1,32 +1,64 @@
-# CanEvo SDK
+<p align="center">
+  <img src="docs/pics/modi.png" alt="MODI" width="300">
+</p>
 
-CanEvo SDK 是面向 MODI CanEvo 关节的 Linux C++ SDK，支持 x86_64 和 ARM 架构，基于 SocketCAN 提供关节发现、参数读写、状态查询和运动控制能力。
+<h1 align="center">CanEvo SDK</h1>
 
-SDK 发布包包含预编译动态库、C++ 头文件、CMake 配置、示例程序源码和配套文档。用户无需编译 SDK 源码，只需下载发布包、配置 CAN-FD 接口并编译示例程序即可开始使用。
+<p align="center">
+  面向 MODI CanEvo 关节的 Linux C++ 控制 SDK
+</p>
+
+<p align="center">
+  <a href="https://github.com/modi-robot/modi_canevo_sdk/releases"><img src="https://img.shields.io/github/v/release/modi-robot/modi_canevo_sdk?label=Release&color=2f80ed" alt="Release"></a>
+  <img src="https://img.shields.io/badge/Platform-Linux-fcc624?logo=linux&logoColor=black" alt="Linux">
+  <img src="https://img.shields.io/badge/Arch-x86__64%20%7C%20ARM64-5c6bc0" alt="x86_64 and ARM64">
+  <img src="https://img.shields.io/badge/C%2B%2B-17-00599c?logo=c%2B%2B" alt="C++17">
+  <img src="https://img.shields.io/badge/CAN-SocketCAN-2e7d32" alt="SocketCAN">
+</p>
+
+<p align="center">
+  <a href="https://github.com/modi-robot/modi_canevo_sdk/releases"><strong>下载 SDK</strong></a>
+  ·
+  <a href="docs/CanEvo%20SDK%20使用说明书.md"><strong>使用说明</strong></a>
+  ·
+  <a href="docs/ModiJointCanevo%20接口文档.md"><strong>接口文档</strong></a>
+  ·
+  <a href="docs/CanEvo关节通信协议_V1.2.4.md"><strong>通信协议</strong></a>
+</p>
+
+---
+
+CanEvo SDK 基于 SocketCAN，提供关节发现、参数读写、状态查询和运动控制能力，支持 x86_64 与 ARM64（aarch64）平台。
+
+正式发布包已包含预编译动态库、C++ 头文件、CMake 配置、示例源码和配套文档。用户无需编译 SDK 源码，只需下载对应架构的发布包，即可进行应用开发。
 
 ## 主要功能
 
-- 支持通过 SDO 扫描关节、读取设备信息和配置关节参数
-- 支持 PP、PV、CSV、CSP、CST 等运动模式
-- 支持单关节与多关节控制
-- 提供阻塞式 NRT 接口和面向实时循环的 RT 接口
-- 提供 CAN-FD 抓包与日志轮转脚本
-- 提供 CMake 包配置，便于集成到用户工程
+| 功能 | 说明 |
+| --- | --- |
+| 设备管理 | 通过 SDO 扫描关节、读取设备信息和配置关节参数 |
+| 运动控制 | 支持 PP、PV、CSV、CSP、CST 等运动模式 |
+| 多轴控制 | 提供单关节与多关节控制接口及示例 |
+| 实时接口 | 提供阻塞式 NRT 接口和面向实时循环的 RT 接口 |
+| 日志诊断 | 提供 CAN-FD 抓包与日志轮转脚本 |
+| 工程集成 | 提供标准 CMake 包配置，便于集成到用户工程 |
 
 ## 支持环境
 
-- 操作系统：Linux
-- 处理器架构：x86_64、ARM64（aarch64）
-- CAN 接口：SocketCAN
-- 推荐 CAN-FD 配置：仲裁段 1 Mbps、数据段 5 Mbps
-- 推荐适配器：KH-UCANFD
-- 构建工具：CMake、支持 C++17 的编译器
+| 项目 | 要求 |
+| --- | --- |
+| 操作系统 | Linux |
+| 处理器架构 | x86_64、ARM64（aarch64） |
+| CAN 接口 | SocketCAN |
+| CAN-FD 配置 | 推荐仲裁段 1 Mbps、数据段 5 Mbps |
+| CAN 适配器 | 推荐 KH-UCANFD |
+| 构建环境 | CMake、支持 C++17 的编译器 |
 
 对实时控制有严格要求时，建议使用 PREEMPT_RT 内核并完成 CPU 隔离和 IRQ 亲和性配置，具体方法参见[实时系统配置指南](docs/CanEvo实时系统配置指南.md)。
 
 ## 下载 SDK
 
-请从 [GitHub Releases](https://github.com/modi-robot/modi_canevo_sdk/releases) 下载最新发布包。
+前往 **[GitHub Releases](https://github.com/modi-robot/modi_canevo_sdk/releases)** 下载最新发布包。
 
 发布包名称格式：
 
@@ -89,7 +121,7 @@ cmake --build build --parallel "$(nproc)"
 
 完整操作步骤参见 [CanEvo SDK 使用说明书](docs/CanEvo%20SDK%20使用说明书.md)。
 
-## 文档导航
+## 文档中心
 
 | 文档 | 内容 |
 | --- | --- |
