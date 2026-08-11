@@ -83,6 +83,10 @@ install(FILES
     include/modi_joint_canevo.h
     DESTINATION include
 )
+install(PROGRAMS
+    script/candump_rotate.sh
+    DESTINATION script
+)
 install(DIRECTORY docs/ DESTINATION docs)
 
 execute_process(

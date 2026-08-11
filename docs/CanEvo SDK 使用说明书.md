@@ -5,20 +5,21 @@
 - [1. 概述](#1-概述)
 - [2. 运行环境准备](#2-运行环境准备)
 - [3. 软件包获取与解压](#3-软件包获取与解压)
-- [4. 编译与安装](#4-编译与安装)
-- [5. CAN-FD 总线配置](#5-can-fd-总线配置)
-- [6. 示例程序说明](#6-示例程序说明)
-- [7. 示例运行流程](#7-示例运行流程)
-- [8. 抓包与日志分析](#8-抓包与日志分析)
-- [9. 开发者集成方式](#9-开发者集成方式)
-- [10. 注意事项](#10-注意事项)
-- [11. 常见问题与处理](#11-常见问题与处理)
+- [4. 编译示例程序](#4-编译示例程序)
+- [5. 示例程序说明](#5-示例程序说明)
+- [6. 示例运行流程](#6-示例运行流程)
+- [7. 抓包与日志分析](#7-抓包与日志分析)
+- [8. 集成到用户项目](#8-集成到用户项目)
+- [9. 注意事项](#9-注意事项)
+- [10. 常见问题与处理](#10-常见问题与处理)
 
 ---
 
 ## 1. 概述
 
 CanEvo SDK 是基于 CanEvo CAN-FD 协议的 Linux/SocketCAN C++ SDK，用于控制 CanEvo 关节。
+
+本文面向获取正式发布包的 SDK 用户，说明环境准备、示例编译运行、业务工程集成和常见故障处理。用户不需要获取或编译 SDK 库源码。
 
 SDK 采用 Bus + Joint 两级结构：
 
@@ -44,167 +45,142 @@ Ubuntu/Debian 系统建议安装：
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential cmake unzip can-utils
+sudo apt install -y build-essential cmake wget unzip can-utils
 ```
+### 2.2 安装 KH-UCANFD 驱动
 
-如果需要使用日志轮转脚本：
+使用昆宏 KH-UCANFD 适配器时，需要先安装对应的 Linux 驱动：
 
 ```bash
-sudo apt install -y apache2-utils
+wget https://gitee.com/ChengDu-KunHong/KH-UCANFD_Linux_SDK/releases/download/latest/KH-UCANFD_Linux_SDK.zip
+unzip KH-UCANFD_Linux_SDK.zip
+cd KH-UCANFD_Linux_SDK-*/
+sudo ./build.sh
 ```
 
-### 2.2 确认 CAN 设备
+安装完成后，确认 `kcan` 内核模块已经加载：
 
-查看 CAN 接口：
+```bash
+lsmod | grep kcan
+```
+
+如果没有输出，请检查 `build.sh` 的编译日志、当前内核版本，以及 `/lib/modules/$(uname -r)/build` 是否存在。驱动安装和实时系统配置的完整说明参见[《CanEvo 实时系统安装、配置与验证指南》](CanEvo实时系统配置指南.md)。
+
+### 2.3 确认 CAN 设备
+
+先查看 CAN 接口是否存在：
 
 ```bash
 ip -br link
+```
+
+配置 CAN-FD，仲裁段波特率为 1 Mbps、数据段波特率为 5 Mbps：
+
+```bash
+sudo ip link set can0 down 2>/dev/null || true
+sudo ip link set can0 type can bitrate 1000000 dbitrate 5000000 fd on
+sudo ip link set can0 txqueuelen 1
+sudo ip link set can0 up
+```
+
+查看配置结果：
+
+```bash
 ip -details link show can0
 ```
 
 正常情况下应能看到 `can0`，配置完成后应为 `UP`，CAN 状态应为 `ERROR-ACTIVE`。
 
+降低 `txqueuelen` 可以减少内核发送队列积压，使报文发送时间更接近控制线程的调度点。多关节报文较多时，可以对比 `txqueuelen 1`、`2`、`4` 的总线实际抖动，最终以示波器或逻辑分析仪的测量结果为准。更完整的配置参见[《CanEvo 实时系统安装、配置与验证指南》](CanEvo实时系统配置指南.md)。
+
 ---
 
 ## 3. 软件包获取与解压
 
-### 3.1 从打包文件使用
+SDK 软件包可从 GitHub Releases 下载：
 
-打包后的文件名通常类似：
+[https://github.com/modi-robot/modi_canevo_sdk/releases](https://github.com/modi-robot/modi_canevo_sdk/releases)
+
+
+在 Releases 页面选择所需版本，并下载与目标机器平台、架构匹配的 ZIP 文件。文件名格式为：
 
 ```text
-canevo_sdk-0.1.0-<git短哈希>-Linux-x86_64.zip
+modi_sdk_<版本>_<平台>_<架构>_<Git短提交>.zip
 ```
 
-将压缩包复制到目标机器后解压：
+各字段之间使用下划线 `_` 分隔。例如版本 `0.0.1`、Linux x86_64 平台的产物为：
+
+```text
+modi_sdk_0.0.1_linux_x86_64_8f73bfb.zip
+```
+
+将 ZIP 文件复制到目标机器的工作目录。以下命令查找当前目录中的 Linux x86_64 SDK 包，解压后进入对应目录：
 
 ```bash
-unzip canevo_sdk-0.1.0-*-Linux-*.zip
-cd canevo_sdk-0.1.0-*-Linux-*
+SDK_ARCHIVE="$(find . -maxdepth 1 -type f \
+  -name 'modi_sdk_*_linux_x86_64_*.zip' -print -quit)"
+
+if [[ -z "${SDK_ARCHIVE}" ]]; then
+  echo "未找到 Linux x86_64 SDK 压缩包" >&2
+  exit 1
+fi
+
+unzip "${SDK_ARCHIVE}"
+SDK_ROOT="${SDK_ARCHIVE%.zip}"
+cd "${SDK_ROOT}"
 ```
 
-解压后的典型目录：
+解压后的目录名与 ZIP 文件名一致（不含 `.zip` 后缀），典型结构如下：
 
 ```text
-canevo_sdk-.../
+modi_sdk_<版本>_<平台>_<架构>_<Git短提交>/
 ├── include/                 # SDK 头文件
 ├── lib/                     # SDK 动态库
 │   ├── libcanevo_sdk_x86.so
 │   ├── runtime/             # 随包运行时库
 │   └── cmake/
 ├── docs/                    # 文档
-└── example/                 # 示例源码和示例 CMakeLists.txt
+├── example/                 # 示例源码和示例 CMakeLists.txt
+└── script/
+    └── candump_rotate.sh    # CAN 抓包与日志轮转脚本
 ```
 
-### 3.2 从源码打包
-
-在源码目录执行：
+本文后续使用 `SDK_ROOT` 表示这个解压后的顶层目录。例如将 `0.0.1` 发布包解压到用户主目录后，可执行：
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc)
-cmake --build build --target package
+export SDK_ROOT="$HOME/modi_sdk_0.0.1_linux_x86_64_8f73bfb"
 ```
 
-生成的 zip 包位于 `build/` 目录。
+如果下载的版本或 Git 短提交不同，请按实际解压目录名修改。可用下面的命令确认路径正确：
+
+```bash
+ls "${SDK_ROOT}/include" "${SDK_ROOT}/lib" "${SDK_ROOT}/example"
+```
 
 ---
 
-## 4. 编译与安装
+## 4. 编译示例程序
 
-### 4.1 从源码编译整个 SDK
-
-```bash
-cd canevo_sdk_x86
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc)
-```
-
-编译指定示例：
+如果已经按照第 3 章进入 SDK 解压目录，执行：
 
 ```bash
-cmake --build build --target example_single_joint_sdo -j4
-cmake --build build --target example_single_joint_csv -j4
-cmake --build build --target example_single_joint_rt_pp -j4
-cmake --build build --target example_multi_joints_pp_csv -j4
+cd example
+mkdir -p build
+cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j"$(nproc)"
 ```
 
-安装到默认目录 `build/install`：
-
-```bash
-cmake --build build --target install
-```
-
-### 4.2 从已解压软件包编译示例
-
-软件包中已经包含 SDK 库和示例源码。进入包内 `example` 目录单独编译：
-
-```bash
-cd canevo_sdk-0.1.0-*-Linux-*/example
-cmake -S . -B build
-cmake --build build -j$(nproc)
-```
-
-示例可执行文件位于：
+编译完成后，示例可执行文件位于：
 
 ```text
 example/build/
 ```
-
 ---
 
-## 5. CAN-FD 总线配置
+## 5. 示例程序说明
 
-### 5.1 通用 SocketCAN 配置
-
-常用配置为仲裁段 1 Mbps、数据段 5 Mbps、CAN-FD 开启：
-
-```bash
-sudo ip link set can0 down
-sudo ip link set can0 type can bitrate 1000000 dbitrate 5000000 fd on restart-ms 1000 berr-reporting on
-sudo ip link set can0 txqueuelen 1
-sudo ip link set can0 up
-
-ip -details link show can0
-```
-
-确认输出中包含：
-
-```text
-can <BERR-REPORTING,FD> state ERROR-ACTIVE
-bitrate 1000000
-dbitrate 5000000
-```
-
-### 5.2 NIIC / mttcan 板卡参考配置
-
-部分 mttcan 板卡需要先配置引脚复用和 TDC：
-
-```bash
-sudo busybox devmem 0x0243d008 32 0x400
-sudo busybox devmem 0x0243d018 32 0x458
-sudo busybox devmem 0x0243d028 32 0x400
-sudo busybox devmem 0x0243d040 32 0x400
-
-sudo ip link set can0 down
-sudo ip link set can0 type can bitrate 1000000 dbitrate 5000000 fd on restart-ms 1000 berr-reporting on
-sudo ip link set can0 txqueuelen 1
-
-sudo chmod 666 /sys/devices/platform/bus@0/c310000.mttcan/net/can0/tdc_offset
-sudo bash -c "echo 0x600 > /sys/devices/platform/bus@0/c310000.mttcan/net/can0/tdc_offset"
-
-sudo ip link set can0 up
-ip -details link show can0
-cat /sys/devices/platform/bus@0/c310000.mttcan/net/can0/tdc_offset
-```
-
-如果 `tdc_offset` 路径不存在，说明当前 CAN 控制器不是该 mttcan 设备，按实际板卡路径配置。
-
----
-
-## 6. 示例程序说明
-
-### 6.1 单关节示例
+### 5.1 单关节示例
 
 | 目标名 | 源文件 | 模式 | 控制方式 | 说明 |
 | --- | --- | --- | --- | --- |
@@ -215,7 +191,6 @@ cat /sys/devices/platform/bus@0/c310000.mttcan/net/can0/tdc_offset
 | `example_single_joint_cst` | `example_single_joint/example_cst.cpp` | CST | PDO 目标电流 | 单关节电流模式测试，默认 0 A |
 | `example_single_joint_nrt_pp` | `example_single_joint/example_nrt_pp.cpp` | PP | SDO 目标位置 | 通过 SDO 下发 PP 目标，适合验证非实时 PP |
 | `example_single_joint_rt_pp` | `example_single_joint/example_rt_pp.cpp` | PP | PDO3 目标位置 | 通过 RxPDO3 下发 PP 目标，适合验证 PP PDO |
-| `example_single_joint_rt_thread` | `example_single_joint/example_rt_thread.cpp` | 无 CAN | 无 | 实时线程时间戳采样，不访问 CAN |
 
 部分单关节示例支持命令行指定关节 ID：
 
@@ -228,7 +203,7 @@ sudo ./example_single_joint_nrt_pp 1
 
 不指定 ID 时，程序通常选择扫描到的第一个关节。
 
-### 6.2 多关节示例
+### 5.2 多关节示例
 
 | 目标名 | 源文件 | 模式 | 控制方式 | 说明 |
 | --- | --- | --- | --- | --- |
@@ -239,7 +214,7 @@ sudo ./example_single_joint_nrt_pp 1
 | `example_multi_joints_pp` | `example_multi_joints/example_pp.cpp` | PP | SDO 目标位置 | 多关节 PP SDO 目标位置示例 |
 | `example_multi_joints_pp_csv` | `example_multi_joints/example_pp_csv.cpp` | PP + CSV | PP 用 PDO3，CSV 用 PDO1 | 1/3/5/7 跑 PP，2/4/6/8 跑 CSV |
 
-### 6.3 NRT 与 RT 示例区别
+### 5.3 NRT 与 RT 示例区别
 
 | 项目 | NRT/SDO 示例 | RT/PDO 示例 |
 | --- | --- | --- |
@@ -252,9 +227,9 @@ sudo ./example_single_joint_nrt_pp 1
 
 ---
 
-## 7. 示例运行流程
+## 6. 示例运行流程
 
-### 7.1 推荐安全流程
+### 6.1 推荐安全流程
 
 1. 确认机械结构无卡滞，关节固定可靠。
 2. 确认 CAN_H/CAN_L/GND 接线正确，终端电阻正确。
@@ -264,10 +239,12 @@ sudo ./example_single_joint_nrt_pp 1
 6. 首次运动时降低速度、加速度和目标角度。
 7. 观察电流、温度、故障码和 CAN 状态。
 
-### 7.2 扫描与读取信息
+### 6.2 扫描与读取信息
+
+以下命令进入第 4 章生成示例可执行文件的目录。这里假设已经按第 3 章设置了 `SDK_ROOT`：
 
 ```bash
-cd canevo_sdk_x86/build/example
+cd "${SDK_ROOT}/example/build"
 sudo ./example_single_joint_sdo
 ```
 
@@ -280,7 +257,7 @@ sudo ./example_single_joint_sdo
 故障代码: 0
 ```
 
-### 7.3 单关节 CSV 测试
+### 6.3 单关节 CSV 测试
 
 ```bash
 sudo ./example_single_joint_csv 2
@@ -288,7 +265,7 @@ sudo ./example_single_joint_csv 2
 
 运行时程序会切换到 CSV 模式，并通过 RxPDO1 下发目标速度。
 
-### 7.4 单关节 PP PDO 测试
+### 6.4 单关节 PP PDO 测试
 
 ```bash
 sudo ./example_single_joint_rt_pp 1
@@ -296,7 +273,7 @@ sudo ./example_single_joint_rt_pp 1
 
 该示例通过 RxPDO3 下发 PP 目标位置和轮廓参数。
 
-### 7.5 多关节 PP + CSV 混合测试
+### 6.5 多关节 PP + CSV 混合测试
 
 ```bash
 sudo ./example_multi_joints_pp_csv
@@ -309,9 +286,9 @@ sudo ./example_multi_joints_pp_csv
 
 ---
 
-## 8. 抓包与日志分析
+## 7. 抓包与日志分析
 
-### 8.1 直接抓包
+### 7.1 直接抓包
 
 ```bash
 candump -tz -x can0
@@ -327,20 +304,47 @@ candump -tz -x can0,242:7FF,402:7FF,782:7FF,7C2:7FF,03F:7FF
 candump -tz -x can0,2C1:7FF,401:7FF,781:7FF,7C1:7FF,03F:7FF
 ```
 
-### 8.2 使用日志轮转脚本
+### 7.2 保存抓包日志
+
+发布包提供了 CAN 日志脚本。它默认从 `can0` 抓包，单个日志达到 20 MB 时自动切换，并只保留最近 20 个文件：
 
 ```bash
-cd canevo_sdk_x86
-./script/candump_rotate.sh can0
+"${SDK_ROOT}/script/candump_rotate.sh" can0
 ```
 
-日志默认保存到：
+抓取其他 CAN 接口时，将接口名作为第一个参数。例如抓取 `can1`：
+
+```bash
+"${SDK_ROOT}/script/candump_rotate.sh" can1
+```
+
+不传参数时默认使用 `can0`：
+
+```bash
+"${SDK_ROOT}/script/candump_rotate.sh"
+```
+
+运行前可以查看系统中实际存在的 CAN 接口：
+
+```bash
+ip -br link | grep -E '(^|\s)(can|vcan)[0-9]+'
+```
+
+如果指定的接口不存在，脚本会报错退出；如果接口存在但没有处于 `UP` 状态，脚本会给出警告，应先完成对应接口的 CAN-FD 配置。
+
+按 `Ctrl+C` 停止抓包。日志默认保存在：
 
 ```text
-build/logs/canevo_can.YYYYMMDD_HHMMSS.log
+<SDK_ROOT>/build/logs/
 ```
 
-### 8.3 常用 COB-ID 对照
+该脚本依赖 `candump` 和 `rotatelogs`；如果尚未安装：
+
+```bash
+sudo apt install -y can-utils apache2-utils
+```
+
+### 7.3 常用 COB-ID 对照
 
 | 类型 | COB-ID | 例：ID=1 | 例：ID=2 |
 | --- | --- | ---: | ---: |
@@ -355,7 +359,7 @@ build/logs/canevo_can.YYYYMMDD_HHMMSS.log
 | SDO 请求 | `0x780 + node_id` | `0x781` | `0x782` |
 | SDO 响应 | `0x7C0 + node_id` | `0x7C1` | `0x7C2` |
 
-### 8.4 CAN-FD 日志格式说明
+### 7.4 CAN-FD 日志格式说明
 
 紧凑日志中 `##` 后第一个十六进制字符是 CAN-FD flags，不是 payload。
 
@@ -376,37 +380,28 @@ build/logs/canevo_can.YYYYMMDD_HHMMSS.log
 
 ---
 
-## 9. 开发者集成方式
+## 8. 集成到用户项目
 
-### 9.1 CMake 集成
+### 8.1 CMake 集成
 
-安装 SDK 后，在业务工程中使用：
+在业务工程配置阶段，将 SDK 解压目录传给 `CMAKE_PREFIX_PATH`：
+
+```bash
+cmake -S . -B build \
+  -DCMAKE_PREFIX_PATH="${SDK_ROOT}"
+cmake --build build -j$(nproc)
+```
+
+业务工程的 `CMakeLists.txt` 使用：
 
 ```cmake
 find_package(canevo_sdk_x86 REQUIRED)
 target_link_libraries(your_target PRIVATE canevo_sdk_x86::canevo_sdk_x86)
 ```
 
-### 9.2 直接编译链接
-
-```bash
-g++ your_app.cpp \
-    -I/path/to/canevo_sdk/include \
-    -L/path/to/canevo_sdk/lib \
-    -lcanevo_sdk_x86 \
-    -lpthread \
-    -o your_app
-```
-
-运行时如果找不到动态库：
-
-```bash
-export LD_LIBRARY_PATH=/path/to/canevo_sdk/lib:$LD_LIBRARY_PATH
-```
-
 ---
 
-## 10. 注意事项
+## 9. 注意事项
 
 1. 运动前必须确认故障码为 0。
 2. 首次测试不要直接使用大角度、大速度、大加速度。
@@ -421,9 +416,9 @@ export LD_LIBRARY_PATH=/path/to/canevo_sdk/lib:$LD_LIBRARY_PATH
 
 ---
 
-## 11. 常见问题与处理
+## 10. 常见问题与处理
 
-### 11.1 `Device "can0" does not exist`
+### 10.1 `Device "can0" does not exist`
 
 原因：
 
@@ -440,7 +435,7 @@ dmesg | grep -i can
 
 确认实际接口名后修改程序或命令中的 CAN 名称。
 
-### 11.2 打开 CAN 成功，但未扫描到在线关节
+### 10.2 打开 CAN 成功，但未扫描到在线关节
 
 可能原因：
 
@@ -466,7 +461,7 @@ can0  TX B -  781  [08]  01 00 0C 00 00 00 00 00
 can0  RX - -  7C1  [05]  01 00 0C 01 00
 ```
 
-### 11.3 `ERROR-PASSIVE` 或 `tx 128 rx 0`
+### 10.3 `ERROR-PASSIVE` 或 `tx 128 rx 0`
 
 含义：
 
@@ -489,7 +484,7 @@ sudo ip link set can0 up
 ip -details link show can0
 ```
 
-### 11.4 SDO 超时或 `errno=-3`
+### 10.4 SDO 超时或 `errno=-3`
 
 可能原因：
 
@@ -505,7 +500,7 @@ ip -details link show can0
 3. 降低总线负载，确认没有多个程序同时控制同一关节。
 4. 确认 `txqueuelen` 配置合理。
 
-### 11.5 `0xFF02` 关节峰值电流过载
+### 10.5 `0xFF02` 关节峰值电流过载
 
 含义：
 
@@ -525,7 +520,7 @@ ip -details link show can0
 4. 等待冷却后重新上电。
 5. 用 SDO 示例确认故障码清零后再低速测试。
 
-### 11.6 程序显示进入 Running，但关节不动
+### 10.6 程序显示进入 Running，但关节不动
 
 排查顺序：
 
@@ -549,7 +544,7 @@ PP 2 号关节应看到：
 402##...
 ```
 
-### 11.7 实时线程创建失败或实时性差
+### 10.7 实时线程创建失败或实时性差
 
 可能原因：
 
@@ -566,20 +561,4 @@ ulimit -r
 uname -a
 ```
 
-如果没有硬实时环境，程序会显示 POSIX fallback，仍可用于功能测试，但实时抖动可能增大。
-
-### 11.8 运行 example 时找不到动态库
-
-错误类似：
-
-```text
-error while loading shared libraries: libcanevo_sdk_x86.so
-```
-
-处理：
-
-```bash
-export LD_LIBRARY_PATH=/path/to/canevo_sdk/lib:$LD_LIBRARY_PATH
-```
-
-如果使用包内 `example/CMakeLists.txt` 编译示例，通常会自动链接包内 SDK。
+如果当前系统不是 PREEMPT_RT 内核，示例仍可用于基本通信功能测试，但不应据此评估实时控制性能。

@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DIST_DIR="${DIST_DIR:-${REPO_ROOT}/build/dist}"
 GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-modi-robot/modi_canevo_sdk}"
+GITHUB_GIT_URL="${GITHUB_GIT_URL:-https://github.com/${GITHUB_REPOSITORY}.git}"
 CHANGELOG_FILE="${DIST_DIR}/modi_sdk_CHANGELOG.md"
 
 if ! command -v gh >/dev/null 2>&1; then
@@ -55,6 +56,10 @@ echo "Attachments:"
 echo "  ${ZIP_FILE}"
 echo "  ${CHANGELOG_FILE}"
 
+echo "Pushing ${RELEASE_TAG} and its commit to GitHub..."
+gh auth setup-git
+git -C "${REPO_ROOT}" push "${GITHUB_GIT_URL}" "refs/tags/${RELEASE_TAG}"
+
 if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
   echo "Updating existing GitHub Release..."
   gh release edit "${RELEASE_TAG}" \
@@ -70,7 +75,6 @@ else
   gh release create "${RELEASE_TAG}" \
     "${ZIP_FILE}" "${CHANGELOG_FILE}" \
     --repo "${GITHUB_REPOSITORY}" \
-    --target "${TAG_COMMIT}" \
     --title "${RELEASE_TITLE}" \
     --notes-file "${CHANGELOG_FILE}"
 fi
