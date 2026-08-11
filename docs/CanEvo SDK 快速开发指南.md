@@ -29,7 +29,7 @@ modi_bus_canevo
 假设 SDK 已解压，并设置了 `SDK_ROOT`：
 
 ```bash
-export SDK_ROOT=/实际路径/modi_sdk_<版本>_<平台>_<架构>_<Git短提交>
+export SDK_ROOT=/实际路径/modi_canevo_sdk_<版本>_<平台>_<架构>_<Git短提交>
 mkdir -p ~/canevo_first_app
 cd ~/canevo_first_app
 ```

@@ -65,14 +65,14 @@ CanEvo SDK 基于 SocketCAN，提供关节发现、参数读写、状态查询�
 发布包名称格式：
 
 ```text
-modi_sdk_<版本>_<平台>_<架构>_<Git短提交>.zip
+modi_canevo_sdk_<版本>_<平台>_<架构>_<Git短提交>.zip
 ```
 
 例如，x86_64 和 ARM64 发布包可能分别为：
 
 ```text
-modi_sdk_0.0.1_linux_x86_64_8f73bfb.zip
-modi_sdk_0.0.1_linux_aarch64_8f73bfb.zip
+modi_canevo_sdk_0.0.1_linux_x86_64_8f73bfb.zip
+modi_canevo_sdk_0.0.1_linux_aarch64_8f73bfb.zip
 ```
 
 请根据目标机器的处理器架构选择对应发布包，可通过 `uname -m` 查看当前架构。
@@ -92,8 +92,8 @@ KH-UCANFD 驱动的安装方法请参见[使用说明书：安装 KH-UCANFD 驱�
 
 ```bash
 uname -m
-unzip modi_sdk_*_linux_*.zip
-cd modi_sdk_*_linux_*
+unzip modi_canevo_sdk_*_linux_*.zip
+cd modi_canevo_sdk_*_linux_*
 export SDK_ROOT="$PWD"
 ```
 
@@ -136,7 +136,7 @@ cmake --build build --parallel "$(nproc)"
 ## 发布包结构
 
 ```text
-modi_sdk_<版本>_<平台>_<架构>_<Git短提交>/
+modi_canevo_sdk_<版本>_<平台>_<架构>_<Git短提交>/
 ├── include/        # SDK 头文件
 ├── lib/            # SDK 动态库、运行时库和 CMake 配置
 ├── example/        # 单关节与多关节示例源码
