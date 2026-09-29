@@ -40,9 +40,9 @@ inline void qiuniu_init() {}
 #endif
 
 constexpr float kDegToRad = static_cast<float>(M_PI) / 180.0f;
-constexpr float kCspStepRad = 0.02f * kDegToRad;
-constexpr float kCspMinPosRad = -30.0f * kDegToRad;
-constexpr float kCspMaxPosRad = 30.0f * kDegToRad;
+constexpr float kCspStepRad = 0.005f * kDegToRad;
+constexpr float kCspMinPosRad = -5.0f * kDegToRad;
+constexpr float kCspMaxPosRad = 5.0f * kDegToRad;
 
 // 全局变量用于信号处理
 static modi_bus_canevo* g_bus = nullptr;
@@ -111,7 +111,7 @@ void* RtLoop(void*) {
                         servo_state == CanEvoServoState::kRunning;
 
     if (in_csp) {
-      // 在-90度～+90度之间运动，每次步进0.05度
+      // 在小角度范围内慢速往复，便于首次 CSP 控制测试。
       target_pos_rad += step_rad;
       if (target_pos_rad >= kCspMaxPosRad) {
         target_pos_rad = kCspMaxPosRad;
@@ -194,7 +194,7 @@ bool WaitControlMode(modi_joint_canevo& joint, CanEvoMode target,
 
 int main() {
   std::cout << "========================================" << std::endl;
-  std::cout << "CSP 测试程序 - 从当前位置开始每周期步进 0.1deg" << std::endl;
+  std::cout << "CSP 测试程序 - 从当前位置开始小角度慢速步进" << std::endl;
   std::cout << "========================================" << std::endl;
   qiuniu_init();
   std::cout << "NIIC hard realtime: "
@@ -363,7 +363,7 @@ int main() {
   }
 
   std::cout << "✓ 关节已切换到 CSP 模式" << std::endl;
-  std::cout << "CSP 步进轨迹运行中：±30 deg 内每周期 0.02 deg，按 Ctrl+C 终止... "
+  std::cout << "CSP 步进轨迹运行中：±5 deg 内每周期 0.005 deg，按 Ctrl+C 终止... "
             << std::endl;
 
   const int ok = static_cast<int>(CanEvoError::kOk);

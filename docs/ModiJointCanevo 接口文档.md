@@ -17,6 +17,8 @@
   - [4.2 总线控制](#42-总线控制)
   - [4.3 实时控制循环](#43-实时控制循环)
   - [4.4 超时配置](#44-超时配置)
+  - [4.5 modi_node_canevo 公共节点接口](#45-modi_node_canevo-公共节点接口)
+  - [4.6 modi_tool_io_canevo 工具 IO 接口](#46-modi_tool_io_canevo-工具-io-接口)
 - [5. modi_joint_canevo 接口列表](#5-modi_joint_canevo-接口列表)
   - [5.1 构造与生命周期](#51-构造与生命周期)
   - [5.2 PDO 实时控制（非阻塞）](#52-pdo-实时控制非阻塞)
@@ -40,11 +42,19 @@
 
 ## 1. 概述
 
-`modi_bus_canevo` 和 `modi_joint_canevo` 是基于 CanEvo V1.2.4 CAN-FD 协议的 x86 (Linux/SocketCAN) 平台关节控制 C++ SDK。
+`modi_bus_canevo`、`modi_node_canevo`、`modi_joint_canevo` 和
+`modi_tool_io_canevo` 是基于 CanEvo V1.2.4 CAN-FD 协议的 x86
+(Linux/SocketCAN) 平台 C++ SDK。
 
-采用 **Bus + Joint** 两级架构：
+采用 **Bus + Node + Capability** 分层架构：
 - `modi_bus_canevo`：总线管理类，对应一条 SocketCAN 接口（如 can0），负责收发线程管理和 SYNC 广播
-- `modi_joint_canevo`：关节控制类，对应总线上一个节点（node_id 1~62），负责 PDO 实时控制和 SDO 配置诊断
+- `modi_node_canevo`：通用节点基类，负责节点绑定、公共设备信息读取和基础 SDO 访问
+- `modi_joint_canevo`：关节能力类，对应一个关节节点，负责 PDO 实时控制和关节 SDO 配置诊断
+- `modi_tool_io_canevo`：工具 IO 能力类，对应工具 IO 节点，负责供电、AI、DI、DO 的 SDO 访问
+
+`modi_joint_canevo` 和 `modi_tool_io_canevo` 都继承
+`modi_node_canevo`。继承只复用公共节点能力，不负责自动识别设备类型；
+设备类型需要通过节点的模块类型或设备能力判断。
 
 所有接口分为两类：
 - **Rt 接口（实时接口，Real-time）**：以 `Rt` 前缀命名，包括 PDO 控制、状态读取、控制字控制等。这些接口面向 ControlLoop 实时路径，PDO 通过实时专用 socket 发送并绕开 SDO 发送锁，适用于高频控制循环（建议 200Hz~1000Hz）。典型接口：`RtSetCspTargetPosition()`、`RtGetJointStatus()` 等。
@@ -174,13 +184,13 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 | 字段名 | 类型 | 单位 | 说明 |
 |--------|------|------|------|
 | `statusword` | `uint16_t` | — | 原始状态字（16bit） |
-| `actual_pos_rad` | `float` | rad | 实际位置 |
-| `actual_vel_rads` | `float` | rad/s | 实际速度 |
-| `actual_cur_a` | `float` | A | 实际转矩电流 |
-| `actual_acc_radss` | `float` | rad/s² | 实际加速度 |
-| `bus_voltage_v` | `float` | V | 母线电压（raw×0.01） |
-| `pcb_temp_c` | `float` | ℃ | PCB温度（raw×0.1） |
-| `motor_temp_c` | `float` | ℃ | 电机温度（raw×0.1） |
+| `actual_pos` | `float` | rad | 实际位置 |
+| `actual_vel` | `float` | rad/s | 实际速度 |
+| `actual_cur` | `float` | A | 实际转矩电流 |
+| `actual_acc` | `float` | rad/s² | 实际加速度 |
+| `bus_voltage` | `float` | V | 母线电压（raw×0.01） |
+| `pcb_temp` | `float` | ℃ | PCB温度（raw×0.1） |
+| `motor_temp` | `float` | ℃ | 电机温度（raw×0.1） |
 
 ### 2.7 TaskConfig — 任务配置结构体
 
@@ -190,10 +200,14 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 |--------|------|------|--------|------|
 | `sync_period_us` | `int` | μs | 5000 | 同步周期（微秒）|
 | `cpu_affinity` | `int` | — | 2 | CPU亲和性（绑定到指定CPU核心编号）|
+| `sched_policy` | `int` | — | `SCHED_FIFO` | Rx 线程调度策略|
+| `sched_priority` | `int` | — | 90 | Rx 线程调度优先级|
 
 > **说明**：
-> - 周期参数会在 `Open()` 时自动通过 SDO 写入到关节（0x00/0x0F）
-> - 实时优先级使用 `SCHED_FIFO` 调度策略，需要 root 权限或 `CAP_SYS_NICE` 能力；配置失败时 `Open()`/`StartControlLoop()` 返回错误
+> - `sync_period_us` 会在 `modi_joint_canevo::NrtInit()` 时通过 SDO
+>   写入关节（0x00/0x0F）；工具 IO 初始化不会写入该对象
+> - Rx 线程会尽力使用 `sched_policy`、`sched_priority` 和
+>   `cpu_affinity`；缺少权限时会降级或打印警告，SDK 不创建用户控制循环线程
 > - CPU 亲和性对实时性能至关重要，建议绑定到隔离的 CPU 核心
 
 ---
@@ -226,27 +240,27 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 |------|---------|------|--------|------|
 | 4 | `Close()` | 无 | `void` | 关闭总线，自动停止控制循环线程和 Rx 线程，释放所有资源 |
 | 5 | `IsOpen()` | 无 | `bool` — true: 已打开 | 查询总线是否已打开 |
-| 6 | `NrtScanJoints()` | 无 | `std::vector<uint8_t>` — 在线关节实际 CAN ID 列表 | 扫描当前总线上在线的关节 CAN ID。内部逐个读取候选节点的 0x00/0x0C，返回关节内部配置的实际 ID，按 ID 从小到大排列 [非实时接口] |
+| 6 | `NrtScanJoints()` | 无 | `std::vector<uint8_t>` — 在线节点 CAN ID 列表 | 当前实现逐个读取候选节点的 0x00/0x0C，只要节点响应就加入结果，因此可能同时返回关节和工具 IO 节点；按 ID 从小到大排列 [非实时接口] |
 
 ### 4.3 实时控制循环
 
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
-| 7 | `StartControlLoop(callback)` | `callback`: 控制循环回调函数（ControlLoopCallback），每个控制周期执行 | `int` — CanEvoError::kOk 成功 | 启动实时控制循环线程。线程会以固定周期执行：①发送 SYNC 广播（0~255 循环）②等待 TxPDO 到齐或 `sync_period_us * 0.2` 超时 ③调用用户回调 ④绝对时间睡眠。线程固定为 `SCHED_FIFO 99` 并绑定到 `cpu_affinity` [实时接口] |
-| 8 | `Join()` | 无 | `void` | 阻塞当前线程，等待控制循环线程结束（通过 `Close()` 触发）。如果控制循环未启动则立即返回 |
+| 7 | `RtStepOnce()` | 无 | `int` — CanEvoError::kOk 成功 | 发送一次 SYNC。用户需要在自己的实时线程中按 `sync_period_us` 周期调用；SDK 不创建用户控制循环线程 [实时接口] |
 
 > **典型用法**：
 > ```cpp
 > TaskConfig config;
 > config.sync_period_us = 5000;  // 5ms 周期
-> // 实时优先级由 SDK 固定：ControlLoop=99, RxLoop=98
 > config.cpu_affinity = 2;  // 绑定到 CPU 2
 > 
 > bus.Open("can0", config);
-> bus.StartControlLoop([&joint]() {
+> // 用户自己的实时线程：
+> while (running) {
+>     bus.RtStepOnce();
 >     joint.RtSetCspTargetPosition(target_pos);
-> });
-> bus.Join();  // 阻塞主线程
+>     // 按 config.sync_period_us 进行绝对时间调度
+> }
 > ```
 
 ### 4.4 超时配置
@@ -255,6 +269,56 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 |------|---------|------|--------|------|
 | 9 | `SetSdoTimeoutMs(ms)` | `ms`: 超时毫秒数（const int） | `void` | 设置 SDO 默认超时（作为后续创建 joint 的默认值） |
 | 10 | `SetPdoTimeoutMs(ms)` | `ms`: 超时毫秒数（const int） | `void` | 设置 PDO 默认超时 |
+
+### 4.5 modi_node_canevo 公共节点接口
+
+`modi_node_canevo` 是关节节点和工具 IO 节点共同继承的基类。它不能直接作为
+具体设备使用，构造函数受保护；应用层应创建 `modi_joint_canevo` 或
+`modi_tool_io_canevo`。
+
+| 序号 | 接口名字 | 参数 | 返回值 | 说明 |
+|------|---------|------|--------|------|
+| 1 | `~modi_node_canevo()` | 无 | — | 虚析构函数，释放节点资源并从总线注销 |
+| 2 | `NrtDestroy()` | 无 | `void` | 释放当前节点绑定，从总线节点注册表中注销 [非实时接口] |
+| 3 | `NrtGetProtocolVersion()` | 无 | `uint16_t` | 读取通用对象 `0x00/0x01` 的协议版本；失败返回默认值 |
+| 4 | `NrtGetModuleType()` | 无 | `uint32_t` | 读取通用对象 `0x00/0x02` 的模块类型；可用于设备分类 |
+| 5 | `NrtGetVendorCode()` | 无 | `uint32_t` | 读取通用对象 `0x00/0x03` 的厂商代号；失败返回默认值 |
+| 6 | `NrtGetLastSdoAbortCode()` | 无 | `uint16_t` | 返回最近一次 SDO Abort 码；只读缓存，不会发起新的 SDO 请求 |
+
+以下接口是派生类内部使用的 `protected` 公共能力，不建议应用层直接依赖：
+
+| 接口名字 | 参数 | 返回值 | 说明 |
+|---------|------|--------|------|
+| `NrtAttachNode(bus, node_id)` | 已打开的 `modi_bus_canevo&`、节点 ID | `int` | 检查参数、绑定底层节点并注册到总线 |
+| `NrtReadU16(index, sub, value)` | 对象主索引、子索引、输出值 | `int` | 读取一个 `uint16_t` SDO 对象 |
+| `NrtWriteU16(index, sub, value)` | 对象主索引、子索引、写入值 | `int` | 写入一个 `uint16_t` SDO 对象 |
+
+### 4.6 modi_tool_io_canevo 工具 IO 接口
+
+`modi_tool_io_canevo` 只表示工具 IO 板，不提供关节位置、速度、控制字和
+PDO 接口。工具 IO 接口全部是 SDO 非实时接口，会等待从站响应。
+
+通道编号统一采用 0-based：
+
+| `index` | 原理图通道 |
+|--------:|------------|
+| 0 | 第 1 路：AI0、DI0、DO0 |
+| 1 | 第 2 路：AI1、DI1、DO1 |
+
+| 序号 | 接口名字 | 参数 | 返回值 | 说明 |
+|------|---------|------|--------|------|
+| 1 | `modi_tool_io_canevo()` | 无 | — | 构造工具 IO 节点对象 |
+| 2 | `~modi_tool_io_canevo()` | 无 | — | 析构并释放节点资源 |
+| 3 | `NrtInit(bus, node_id)` | 已打开的总线引用、工具 IO 节点 ID | `int` | 绑定工具 IO 节点；不会写入关节同步周期 |
+| 4 | `RtGetToolSupplyVoltage(voltage_v)` | `float& voltage_v` 输出电压 | `int` | 读取 `0xE0/0x00`，原始值乘 `0.01` 得到 V |
+| 5 | `RtGetToolAnalogInput(index, voltage_v)` | `const uint8_t index`、`float& voltage_v` | `int` | `index=0` 读 `0xE0/0x03`，`index=1` 读 `0xE0/0x04`，单位 V |
+| 6 | `RtGetToolDigitalInput(index, value)` | `const uint8_t index`、`bool& value` | `int` | 读取 `0xE0/0x05`，返回指定 DI 通道状态 |
+| 7 | `RtGetToolDigitalOutput(index, value)` | `const uint8_t index`、`bool& value` | `int` | 读取 `0xE0/0x06`，返回指定 DO 通道状态 |
+| 8 | `RtSetToolDigitalOutput(index, value)` | `const uint8_t index`、`bool value` | `int` | 先读取当前 DO 位图，只修改指定通道，再写回 `0xE0/0x06` |
+
+AI、DI、DO 接口传入 `index >= 2` 时返回 `CanEvoError::kInvalidParam`。
+工具 IO 接口失败时，应结合返回值和 `NrtGetLastSdoAbortCode()` 判断是超时
+还是从站拒绝。DO 设置会真实改变 24V 输出，测试时应确认外部负载和接线安全。
 
 ---
 
@@ -590,29 +654,22 @@ int main() {
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    // 7. 启动控制循环线程（使用 Lambda 捕获关节对象）
+    // 7. 用户自己创建实时控制循环
     float target_pos_rad = 0.0f;
-    auto ret = bus.StartControlLoop([&joint, &target_pos_rad]() {
+    while (running) {
         // 每个控制周期执行一次（5ms）
-        // SDK 会自动发送 SYNC 并管理实时调度
-        
+        bus.RtStepOnce();  // 发送 SYNC
+
         target_pos_rad += 1.0f * (M_PI / 180.0f);  // 每次步进 1 度
         joint.RtSetCspTargetPosition(target_pos_rad);
-        
+
         // 可选：读取关节状态
         // JointStatus st;
         // joint.RtGetJointStatus(st);
-    });
-    
-    if (ret != static_cast<int>(CanEvoError::kOk)) {
-        std::cerr << "✗ 启动控制循环失败" << std::endl;
-        return -1;
+        // 按 config.sync_period_us 进行绝对时间调度
     }
 
     std::cout << "控制循环运行中，按 Ctrl+C 终止..." << std::endl;
-
-    // 8. 等待控制循环线程（阻塞主线程，直到收到信号）
-    bus.Join();
 
     return 0;
 }

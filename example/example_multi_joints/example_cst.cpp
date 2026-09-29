@@ -18,12 +18,15 @@
 #include <sys/mman.h>
 #include <time.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -57,6 +60,29 @@ enum class RunState {
 };
 
 static std::atomic<RunState> g_run_state{RunState::kRunning};
+
+void PrintUsage(const char* program) {
+  std::cout << "用法:\n"
+            << "  " << program << " [joint_id ...]\n\n"
+            << "示例:\n"
+            << "  " << program << "        # 不传参数，默认启动扫描到的第一个关节\n"
+            << "  " << program << " 8      # 只启动 8 号关节\n"
+            << "  " << program << " 8 9 10 # 只启动 8、9、10 号关节\n";
+}
+
+bool ParseNodeId(const char* text, uint8_t& node_id) {
+  char* end = nullptr;
+  const long value = std::strtol(text, &end, 0);
+  if (end == text || *end != '\0' || value < 1 || value > 62) {
+    return false;
+  }
+  node_id = static_cast<uint8_t>(value);
+  return true;
+}
+
+bool ContainsNodeId(const std::vector<uint8_t>& ids, const uint8_t node_id) {
+  return std::find(ids.begin(), ids.end(), node_id) != ids.end();
+}
 
 timespec AddNs(timespec current, long ns) {
   current.tv_nsec += ns;
@@ -178,7 +204,15 @@ bool WaitControlMode(modi_joint_canevo& joint, CanEvoMode target,
   return false;
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (arg == "--help" || arg == "-h") {
+      PrintUsage(argv[0]);
+      return 0;
+    }
+  }
+
   std::cout << "========================================" << std::endl;
   std::cout << "CST 测试程序 - 多关节持续下发 0 A 目标电流" << std::endl;
   std::cout << "========================================" << std::endl;
@@ -267,13 +301,44 @@ int main() {
   bus.SetPdoTimeoutMs(50);
 
   // 10. 扫描 can 总线上的节点，若已知节点号可以跳过此步
-  const auto joint_ids = bus.NrtScanJoints();
-  if (joint_ids.empty()) {
+  const auto scanned_joint_ids = bus.NrtScanJoints();
+  if (scanned_joint_ids.empty()) {
     std::cerr << "✗ 未扫描到在线关节" << std::endl;
     bus.Close();
     return -1;
   }
-  std::cout << "✓ 扫描到 " << joint_ids.size() << " 个关节, ID: ";
+
+  std::vector<uint8_t> joint_ids;
+  for (int i = 1; i < argc; ++i) {
+    uint8_t node_id = 0;
+    if (!ParseNodeId(argv[i], node_id)) {
+      std::cerr << "✗ 无效关节号: " << argv[i] << std::endl;
+      bus.Close();
+      return -1;
+    }
+    if (!ContainsNodeId(scanned_joint_ids, node_id)) {
+      std::cerr << "✗ 未扫描到请求的关节 ID=" << static_cast<int>(node_id)
+                << std::endl;
+      bus.Close();
+      return -1;
+    }
+    if (!ContainsNodeId(joint_ids, node_id)) {
+      joint_ids.push_back(node_id);
+    }
+  }
+  if (joint_ids.empty()) {
+    joint_ids.push_back(scanned_joint_ids.front());
+    std::cout << "未传入关节号，默认使用扫描到的第一个关节: "
+              << static_cast<int>(joint_ids.front()) << std::endl;
+  }
+
+  std::cout << "✓ 扫描到 " << scanned_joint_ids.size() << " 个关节, ID: ";
+  for (const auto id : scanned_joint_ids) {
+    std::cout << static_cast<int>(id) << " ";
+  }
+  std::cout << std::endl;
+
+  std::cout << "✓ 本次参与 CST 测试的关节: ";
   for (const auto id : joint_ids) {
     std::cout << static_cast<int>(id) << " ";
   }

@@ -208,10 +208,10 @@ sudo ./example_single_joint_nrt_pp 1
 | 目标名 | 源文件 | 模式 | 控制方式 | 说明 |
 | --- | --- | --- | --- | --- |
 | `example_multi_joints_sdo` | `example_multi_joints/example_sdo.cpp` | 无运动 | SDO | 扫描并初始化总线上全部关节 |
-| `example_multi_joints_csv` | `example_multi_joints/example_csv.cpp` | CSV | PDO 目标速度 | 多关节 CSV 往复运动 |
-| `example_multi_joints_csp` | `example_multi_joints/example_csp.cpp` | CSP | PDO 目标位置 | 多关节 CSP 周期同步位置控制 |
-| `example_multi_joints_cst` | `example_multi_joints/example_cst.cpp` | CST | PDO 目标电流 | 多关节 CST 电流控制 |
-| `example_multi_joints_pp` | `example_multi_joints/example_pp.cpp` | PP | SDO 目标位置 | 多关节 PP SDO 目标位置示例 |
+| `example_multi_joints_csv` | `example_multi_joints/example_csv.cpp` | CSV | PDO 目标速度 | 多关节 CSV 往复运动，支持命令行指定关节 ID |
+| `example_multi_joints_csp` | `example_multi_joints/example_csp.cpp` | CSP | PDO 目标位置 | 多关节 CSP 周期同步位置控制，支持命令行指定关节 ID |
+| `example_multi_joints_cst` | `example_multi_joints/example_cst.cpp` | CST | PDO 目标电流 | 多关节 CST 电流控制，支持命令行指定关节 ID |
+| `example_multi_joints_pp` | `example_multi_joints/example_pp.cpp` | PP | SDO 目标位置 | 多关节 PP SDO 目标位置示例，支持命令行指定关节 ID |
 | `example_multi_joints_pp_csv` | `example_multi_joints/example_pp_csv.cpp` | PP + CSV | PP 用 PDO3，CSV 用 PDO1 | 1/3/5/7 跑 PP，2/4/6/8 跑 CSV |
 
 ### 5.3 NRT 与 RT 示例区别
@@ -265,6 +265,19 @@ sudo ./example_single_joint_csv 2
 
 运行时程序会切换到 CSV 模式，并通过 RxPDO1 下发目标速度。
 
+### 6.3.1 多关节 CSV / CST / PP 测试
+
+这些多关节示例现在都支持直接在命令行里输入关节号，未传参数时默认使用扫描到的第一个关节：
+
+```bash
+sudo ./example_multi_joints_csv 8
+sudo ./example_multi_joints_cst 8 9 10
+sudo ./example_multi_joints_pp 1 3 5
+sudo ./example_multi_joints_csp 2 4 6
+```
+
+它们会先扫描总线，再从扫描结果里挑出你输入的关节号，只对这些关节执行各自的测试流程。
+
 ### 6.4 单关节 PP PDO 测试
 
 ```bash
@@ -283,6 +296,7 @@ sudo ./example_multi_joints_pp_csv
 
 - 1/3/5/7：PP 模式，RxPDO3 下发目标位置。
 - 2/4/6/8：CSV 模式，RxPDO1 下发目标速度。
+- 这个示例仍然保持固定角色映射，不改成命令行选关节号。
 
 ---
 

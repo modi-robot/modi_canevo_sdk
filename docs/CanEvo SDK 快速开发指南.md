@@ -576,3 +576,7 @@ void* RtLoop(void*) {
 3. `example_single_joint/example_csv.cpp`
 4. `example_single_joint/example_csp.cpp`
 5. `example_multi_joints/` 下的多关节示例
+
+其中 `example_multi_joints_csv`、`example_multi_joints_cst`、`example_multi_joints_pp`
+和 `example_multi_joints_csp` 都支持命令行输入关节 ID；`example_multi_joints_pp_csv`
+仍保持固定的 1/3/5/7 与 2/4/6/8 角色映射。
