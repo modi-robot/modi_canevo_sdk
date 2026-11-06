@@ -119,6 +119,10 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel "$(nproc)"
 ```
 
+单关节摩擦参数读-写-读测试可运行 `build/example/example_single_joint_friction_param_roundtrip`。
+命令需要 CAN 接口、Node ID 和 7 个 p0~p6 写入值；程序会覆盖关节当前参数，
+运行前应确认目标并记录原值。
+
 首次连接关节时，建议先运行 SDO 示例扫描设备并读取状态，再进行运动控制测试。运行前请确保关节固定可靠、急停可用且运动范围安全。
 
 完整操作步骤参见 [CanEvo SDK 使用说明书](docs/CanEvo%20SDK%20使用说明书.md)。

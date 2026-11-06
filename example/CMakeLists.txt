@@ -52,6 +52,7 @@ function(enable_necro_rt target_name)
 endfunction()
 
 add_sdk_example(example_single_joint_sdo example_single_joint/example_sdo.cpp)
+add_sdk_example(example_single_joint_friction_param_roundtrip example_single_joint/example_friction_param_roundtrip.cpp)
 add_sdk_example(example_single_joint_csv example_single_joint/example_csv.cpp)
 add_sdk_example(example_single_joint_pv example_single_joint/example_pv.cpp)
 enable_necro_rt(example_single_joint_pv)
@@ -73,4 +74,7 @@ add_sdk_example(example_multi_joints_pp_csv example_multi_joints/example_pp_csv.
 enable_necro_rt(example_multi_joints_pp_csv)
 
 add_sdk_example(example_tool_io example_tool_io/example_tool_io.cpp)
+add_sdk_example(example_tool_rs485 example_tool_io/example_tool_rs485.cpp)
 add_sdk_example(example_regen example_regen/example_regen.cpp)
+
+add_sdk_example(example_multi_joints_set_zero example_multi_joints/example_set_zero.cpp)

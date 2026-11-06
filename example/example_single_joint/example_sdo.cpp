@@ -3,16 +3,24 @@
  * @brief 最简示例: 打开/关闭CAN总线，初始化/销毁关节
  *
  * 运行前请先在外部手动配置并拉起 CAN-FD 接口:
- *   sudo ip link set can0 type can bitrate 1000000 dbitrate 5000000 fd on
- *   sudo ip link set can0 up
+ *   sudo ip link set <can_interface> type can bitrate 1000000 dbitrate 5000000 fd on
+ *   sudo ip link set <can_interface> up
  * Open() 只打开已配置好的 SocketCAN 接口。
  */
 
 #include <iostream>
+#include <string>
 
 #include "modi_joint_canevo.h"
 
-int main() {
+int main(int argc, char* argv[]) {
+  if (argc != 2) {
+    std::cerr << "用法: " << argv[0] << " <CAN接口名称>\n"
+              << "示例: " << argv[0] << " can0" << std::endl;
+    return -1;
+  }
+  const std::string can_interface = argv[1];
+
   std::cout << "\n========== 示例 01: 总线打开/关闭 ==========\n" << std::endl;
 
   // 1. 创建总线对象
@@ -22,18 +30,18 @@ int main() {
   TaskConfig cfg;
   cfg.sync_period_us = 5000;
   cfg.cpu_affinity = 2;
-  if (bus.Open("can0", cfg) != 0) {
-    std::cerr << "打开 CAN 总线 can0 失败" << std::endl;
+  if (bus.Open(can_interface, cfg) != 0) {
+    std::cerr << "打开 CAN 总线 " << can_interface << " 失败" << std::endl;
     return -1;
   }
-  std::cout << "打开 CAN 总线 can0 成功" << std::endl;
+  std::cout << "打开 CAN 总线 " << can_interface << " 成功" << std::endl;
   const auto joint_ids = bus.NrtScanJoints();
   if (joint_ids.empty()) {
-    std::cerr << "未扫描到在线关节" << std::endl;
+    std::cerr << "未扫描到在线 CanEvo 节点" << std::endl;
     bus.Close();
     return -1;
   }
-  std::cout << "发现 " << joint_ids.size() << " 个关节, ID: ";
+  std::cout << "发现 " << joint_ids.size() << " 个 CanEvo 节点（含关节及 IO 等模块）, ID: ";
   for (const auto id : joint_ids) {
     std::cout << static_cast<int>(id) << " ";
   }
@@ -101,6 +109,15 @@ int main() {
             << std::endl;
   std::cout << "输出轴编码器分辨率(P/R): " << joint.NrtGetOutputEncRes()
             << std::endl;
+
+  for (std::size_t i = 0; i < 7; ++i) {
+    std::cout << "关节摩擦参数 " << i << ": "
+              << joint.NrtGetFrictionParam(static_cast<uint8_t>(i))
+              << std::endl;
+  }
+  std::cout << "力矩系数(N·m/A): " << joint.NrtGetTorqueCoefficient()
+            << std::endl;
+  // 写入示例：joint.NrtSetFrictionParam(0, 1.234f);
 
   std::cout << "实际位置(rad): " << joint.NrtGetActualPosition() << std::endl;
   std::cout << "实际速度(rad/s): " << joint.NrtGetActualVelocity() << std::endl;

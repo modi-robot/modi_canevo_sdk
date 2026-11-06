@@ -3,32 +3,41 @@
  * @brief 最简示例: 打开/关闭CAN总线，初始化/销毁关节
  *
  * 运行前请先在外部手动配置并拉起 CAN-FD 接口:
- *   sudo ip link set can0 type can bitrate 1000000 dbitrate 5000000 fd on
- *   sudo ip link set can0 up
+ *   sudo ip link set <can_interface> type can bitrate 1000000 dbitrate 5000000 fd on
+ *   sudo ip link set <can_interface> up
  * Open() 只打开已配置好的 SocketCAN 接口。
  */
 
 #include <iostream>
+#include <string>
 #include <vector>
 
 #include "modi_joint_canevo.h"
 
-int main() {
+int main(int argc, char* argv[]) {
+  if (argc != 2) {
+    std::cerr << "用法: " << argv[0] << " <CAN接口名称>\n"
+              << "示例: " << argv[0] << " can0" << std::endl;
+    return -1;
+  }
+  const std::string can_interface = argv[1];
+
   std::cout << "\n========== 示例 01: 总线打开/关闭 ==========\n" << std::endl;
 
   // 1. 创建总线对象
   modi_bus_canevo bus;
 
   // 2. 打开已手动配置好的 CAN 总线
-  std::cout << "正在打开 CAN 总线 can0 ... " << std::flush;
+  std::cout << "正在打开 CAN 总线 " << can_interface << " ... "
+            << std::flush;
   TaskConfig cfg;
   cfg.sync_period_us = 5000;
   cfg.cpu_affinity = 2;
-  if (bus.Open("can0", cfg) != 0) {
-    std::cerr << "打开 CAN 总线 can0 失败" << std::endl;
+  if (bus.Open(can_interface, cfg) != 0) {
+    std::cerr << "打开 CAN 总线 " << can_interface << " 失败" << std::endl;
     return -1;
   }
-  std::cout << "打开 CAN 总线 can0 成功" << std::endl;
+  std::cout << "打开 CAN 总线 " << can_interface << " 成功" << std::endl;
 
   std::cout << "正在扫描在线关节 ... " << std::flush;
   const auto joint_ids = bus.NrtScanJoints();

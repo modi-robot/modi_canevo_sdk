@@ -21,6 +21,8 @@
 #include <ctime>
 #include <iomanip>
 #include <iostream>
+#include <stdexcept>
+#include <string>
 #include <thread>
 
 #include "modi_joint_canevo.h"
@@ -41,14 +43,15 @@ inline void qiuniu_init() {}
 
 constexpr float kDegToRad = static_cast<float>(M_PI) / 180.0f;
 constexpr float kCspStepRad = 0.005f * kDegToRad;
-constexpr float kCspMinPosRad = -5.0f * kDegToRad;
-constexpr float kCspMaxPosRad = 5.0f * kDegToRad;
+constexpr float kCspMoveRangeRad = 1.0f * kDegToRad;
 
 // 全局变量用于信号处理
 static modi_bus_canevo* g_bus = nullptr;
 static modi_joint_canevo* g_joint = nullptr;
 static int g_period_us = 5000;
 static std::atomic<int> g_rt_ret{0};
+static float g_start_pos_rad = 0.0f;
+static bool g_motion_enabled = false;
 
 enum class RunState {
   kRunning,
@@ -76,10 +79,10 @@ void* RtLoop(void*) {
   __RT(clock_gettime(CLOCK_MONOTONIC, &next_wakeup));
 
   const long period_ns = g_period_us * 1000L;
-  float target_pos_rad = 0.0f;
+  float target_pos_rad = g_start_pos_rad;
   float step_rad = kCspStepRad;
-  auto actual_pos = g_joint->NrtGetActualPosition();
-  target_pos_rad = std::clamp(actual_pos, kCspMinPosRad, kCspMaxPosRad);
+  const float min_pos_rad = g_start_pos_rad - kCspMoveRangeRad;
+  const float max_pos_rad = g_start_pos_rad + kCspMoveRangeRad;
 
   while (g_run_state.load(std::memory_order_acquire) != RunState::kRtExit) {
     next_wakeup = AddNs(next_wakeup, period_ns);
@@ -103,22 +106,20 @@ void* RtLoop(void*) {
       g_rt_ret.store(-1000, std::memory_order_release);
       break;
     }
-    if (current_mode == CanEvoMode::kPp) {
-      g_rt_ret.store(-1001, std::memory_order_release);
-      break;
-    }
     const bool in_csp = g_joint && current_mode == CanEvoMode::kCsp &&
                         servo_state == CanEvoServoState::kRunning;
 
     if (in_csp) {
-      // 在小角度范围内慢速往复，便于首次 CSP 控制测试。
-      target_pos_rad += step_rad;
-      if (target_pos_rad >= kCspMaxPosRad) {
-        target_pos_rad = kCspMaxPosRad;
-        step_rad = -kCspStepRad;
-      } else if (target_pos_rad <= kCspMinPosRad) {
-        target_pos_rad = kCspMinPosRad;
-        step_rad = kCspStepRad;
+      // 默认持续发送当前位置，只有显式传入 --move 才做小幅往复。
+      if (g_motion_enabled) {
+        target_pos_rad += step_rad;
+        if (target_pos_rad >= max_pos_rad) {
+          target_pos_rad = max_pos_rad;
+          step_rad = -kCspStepRad;
+        } else if (target_pos_rad <= min_pos_rad) {
+          target_pos_rad = min_pos_rad;
+          step_rad = kCspStepRad;
+        }
       }
 
       const int set_ret = g_joint->RtSetCspTargetPosition(target_pos_rad);
@@ -192,9 +193,41 @@ bool WaitControlMode(modi_joint_canevo& joint, CanEvoMode target,
   return false;
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+  if (argc < 3 || argc > 4 ||
+      (argc == 4 && std::string(argv[3]) != "--move")) {
+    std::cerr << "用法: " << argv[0]
+              << " <CAN接口> <节点ID> [--move]\n"
+              << "示例（9号节点保持当前位置）: " << argv[0]
+              << " can1 9\n"
+              << "示例（9号节点在当前位置±1度往复）: " << argv[0]
+              << " can1 9 --move" << std::endl;
+    return -1;
+  }
+
+  const std::string can_interface = argv[1];
+  int node_id_value = 0;
+  try {
+    std::size_t parsed = 0;
+    node_id_value = std::stoi(argv[2], &parsed);
+    if (parsed != std::string(argv[2]).size() || node_id_value < 1 ||
+        node_id_value > 62) {
+      throw std::invalid_argument("节点ID超出范围");
+    }
+  } catch (const std::exception&) {
+    std::cerr << "节点ID无效: " << argv[2] << "（有效范围 1~62）"
+              << std::endl;
+    return -1;
+  }
+  const uint8_t node_id = static_cast<uint8_t>(node_id_value);
+  g_motion_enabled = argc == 4;
+
   std::cout << "========================================" << std::endl;
-  std::cout << "CSP 测试程序 - 从当前位置开始小角度慢速步进" << std::endl;
+  std::cout << "CSP 单关节测试程序" << std::endl;
+  std::cout << "CAN接口: " << can_interface
+            << ", 节点ID: " << node_id_value
+            << ", 动作: " << (g_motion_enabled ? "当前位置±1度往复" : "保持当前位置")
+            << std::endl;
   std::cout << "========================================" << std::endl;
   qiuniu_init();
   std::cout << "NIIC hard realtime: "
@@ -272,31 +305,16 @@ int main() {
   std::signal(SIGTERM, SignalHandler);  // kill 命令
 
   // 8. 打开已手动配置好的 CAN 总线（内部只启动 Rx 线程）
-  if (bus.Open("can0", task_config) != static_cast<int>(CanEvoError::kOk)) {
-    std::cerr << "✗ 无法打开 CAN 总线" << std::endl;
+  if (bus.Open(can_interface, task_config) !=
+      static_cast<int>(CanEvoError::kOk)) {
+    std::cerr << "✗ 无法打开 CAN 总线: " << can_interface << std::endl;
     return -1;
   }
   // 9. 配置超时
   bus.SetSdoTimeoutMs(50);
   bus.SetPdoTimeoutMs(50);
 
-  // 10. 扫描can总线上的节点，若已知节点号可以跳过此步，节点号用于初始化关节
-  const auto joint_ids = bus.NrtScanJoints();
-  if (joint_ids.empty()) {
-    std::cerr << "✗ 未扫描到在线关节" << std::endl;
-    bus.Close();
-    return -1;
-  }
-  std::cout << "✓ 扫描到 " << joint_ids.size() << " 个关节, ID: ";
-  for (const auto id : joint_ids) {
-    std::cout << static_cast<int>(id) << " ";
-  }
-  std::cout << std::endl;
-  const uint8_t node_id = joint_ids.front();
-  std::cout << "✓ 默认选择第一个关节 ID: " << static_cast<int>(node_id)
-            << std::endl;
-
-  // 11. 初始化关节
+  // 10. 直接初始化命令行指定的关节，不扫描或选择其他节点。
   if (joint.NrtInit(bus, node_id) != static_cast<int>(CanEvoError::kOk)) {
     std::cerr << "✗ 关节初始化失败" << std::endl;
     bus.Close();
@@ -304,6 +322,11 @@ int main() {
   }
   std::cout << "✓ Joint 初始化完成 (Node ID: " << static_cast<int>(node_id)
             << ")" << std::endl;
+
+  // CSP 的首帧目标必须从反馈位置开始，避免使能瞬间产生位置跳变。
+  g_start_pos_rad = joint.NrtGetActualPosition();
+  std::cout << "✓ 初始位置: " << g_start_pos_rad / kDegToRad << " deg"
+            << std::endl;
 
   // 12. 如果有故障就先清除故障。
   auto fault_code = joint.NrtGetFaultCode();
@@ -332,21 +355,21 @@ int main() {
     bus.Close();
     return -1;
   }
-  if (!WaitServoState(joint, CanEvoServoState::kRunning,
-                      "等待 CSP Running 状态")) {
-    pthread_attr_destroy(&attr);
-    joint.NrtDestroy();
-    bus.Close();
-    return -1;
-  }
-  if (!WaitControlMode(joint, CanEvoMode::kCsp, "等待 CSP 模式切换")) {
+
+  // 先发送当前位置目标，再发第一帧 SYNC。这样 CSP 切换生效时不会使用
+  // 未初始化或遗留的位置目标。
+  const int prefill_ret = joint.RtSetCspTargetPosition(g_start_pos_rad);
+  if (prefill_ret != static_cast<int>(CanEvoError::kOk)) {
+    std::cerr << "✗ 预填 CSP 初始目标失败, ret=" << prefill_ret << std::endl;
+    joint.NrtDisable();
     pthread_attr_destroy(&attr);
     joint.NrtDestroy();
     bus.Close();
     return -1;
   }
 
-  // 14. CSP Running 后再创建实时线程；电机会从当前位置开始步进
+  // NrtEnable 返回后立即启动 5 ms 周期。模式切换阶段也必须持续发送
+  // SYNC，不能等到 CSP/Running 已经确认后才启动周期线程。
   pthread_t rt_thread{};
   const int create_ret =
       __RT(pthread_create(&rt_thread, &attr, RtLoop, nullptr));
@@ -362,9 +385,32 @@ int main() {
     return -1;
   }
 
+  if (!WaitServoState(joint, CanEvoServoState::kRunning,
+                      "等待 CSP Running 状态")) {
+    joint.NrtDisable();
+    g_run_state.store(RunState::kRtExit, std::memory_order_release);
+    __RT(pthread_join(rt_thread, nullptr));
+    joint.NrtDestroy();
+    bus.Close();
+    return -1;
+  }
+  if (!WaitControlMode(joint, CanEvoMode::kCsp, "等待 CSP 模式切换")) {
+    joint.NrtDisable();
+    g_run_state.store(RunState::kRtExit, std::memory_order_release);
+    __RT(pthread_join(rt_thread, nullptr));
+    joint.NrtDestroy();
+    bus.Close();
+    return -1;
+  }
+
   std::cout << "✓ 关节已切换到 CSP 模式" << std::endl;
-  std::cout << "CSP 步进轨迹运行中：±5 deg 内每周期 0.005 deg，按 Ctrl+C 终止... "
-            << std::endl;
+  if (g_motion_enabled) {
+    std::cout << "CSP 轨迹运行中：以初始位置为中心±1 deg，速度约1 deg/s；"
+                 "按 Ctrl+C 终止..."
+              << std::endl;
+  } else {
+    std::cout << "CSP 保持当前位置中；按 Ctrl+C 终止..." << std::endl;
+  }
 
   const int ok = static_cast<int>(CanEvoError::kOk);
   while (g_run_state.load(std::memory_order_acquire) == RunState::kRunning &&
@@ -376,13 +422,17 @@ int main() {
       g_rt_ret.load(std::memory_order_acquire) == ok) {
     std::cout << "收到退出信号，先失能关节并保持 CSP 周期帧收尾..."
               << std::endl;
-    const int disable_ret = joint.NrtDisable();
-    if (disable_ret != static_cast<int>(CanEvoError::kOk)) {
-      std::cerr << "✗ 失能失败, ret=" << disable_ret << std::endl;
-      PrintJointDiag(joint);
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  } else {
+    std::cerr << "周期线程异常，先失能关节再退出..." << std::endl;
   }
+
+  // 无论是 Ctrl+C 还是实时线程异常，都在周期线程仍运行时先失能。
+  const int disable_ret = joint.NrtDisable();
+  if (disable_ret != static_cast<int>(CanEvoError::kOk)) {
+    std::cerr << "✗ 失能失败, ret=" << disable_ret << std::endl;
+    PrintJointDiag(joint);
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
   g_run_state.store(RunState::kRtExit, std::memory_order_release);
   __RT(pthread_join(rt_thread, nullptr));
@@ -397,7 +447,6 @@ int main() {
     }
   }
 
-  joint.NrtDisable();
   joint.NrtDestroy();
   bus.Close();
   return 0;

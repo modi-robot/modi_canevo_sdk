@@ -29,7 +29,7 @@
   - [5.7 SDO 设备信息（阻塞，Index 0x00）](#57-sdo-设备信息阻塞index-0x00)
   - [5.8 SDO 关节参数（阻塞，Index 0x01）](#58-sdo-关节参数阻塞index-0x01)
   - [5.9 SDO 控制器参数（阻塞，Index 0x07）](#59-sdo-控制器参数阻塞index-0x07)
-  - [5.10 SDO 编码器参数（阻塞，Index 0x08）](#510-sdo-编码器参数阻塞index-0x08)
+  - [5.10 SDO 编码器及摩擦参数、力矩系数（阻塞，Index 0x08 / 0x1F）](#510-sdo-编码器及摩擦参数力矩系数阻塞index-0x08--0x1f)
   - [5.11 SDO PP 模式轮廓参数（阻塞，Index 0x21）](#511-sdo-pp-模式轮廓参数阻塞index-0x21)
   - [5.12 SDO 关节实际状态（阻塞，Index 0x20，只读）](#512-sdo-实际量阻塞index-0x20只读)
   - [5.13 SDO 控制字操作（阻塞）](#513-sdo-控制字操作阻塞)
@@ -209,7 +209,10 @@ SDK 接口返回值统一使用的错误码，底层类型 `int`。
 > - Rx 线程会尽力使用 `sched_policy`、`sched_priority` 和
 >   `cpu_affinity`；缺少权限时会降级或打印警告，SDK 不创建用户控制循环线程
 > - CPU 亲和性对实时性能至关重要，建议绑定到隔离的 CPU 核心
-
+> - SDK 内部固定关闭 SocketCAN 本地回环（`CAN_RAW_LOOPBACK=0`，不可配置）：
+>   发送帧不再回到本机，可消除发送核上约 8 帧/周期的 `NET_RX` 软中断；
+>   代价是在本机 `candump` 看不到本进程发出的 SYNC/RxPDO，需要抓这些帧时
+>   请在总线上并接第二路监听设备
 ---
 
 ## 3. 常量定义
@@ -356,7 +359,7 @@ AI、DI、DO 接口传入 `index >= 2` 时返回 `CanEvoError::kInvalidParam`。
 
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
-| 13 | `RtGetJointStatus(out)` | `out`: [out] 输出状态结构体（JointStatus&） | `int` — CanEvoError::kOk 成功（有新数据）；kNotInitialized 未初始化 | 获取最新关节状态，从 TxPDO0/TxPDO1 缓存读取 [实时接口] |
+| 13 | `RtGetJointStatus(out)` | `out`: [out] 输出状态结构体（JointStatus&） | `int` — kOk 成功；kNotInitialized 未初始化；kPdoTimeout 无有效反馈、过期或快照正在更新 | 接收线程解析 TxPDO0/TxPDO1，Get 只复制已解析状态；重复读取不要求新帧，失败不修改 out [实时接口] |
 | 14 | `RtGetEmcy(out_fault)` | `out_fault`: [out] 输出故障码枚举（CanEvoFault&） | `bool` — true: 已收到过 EMCY 状态；false: 尚未收到 | 非消费式读取最新 EMCY 状态缓存，可周期调用。收到 0x0000 或清故障成功后返回 kNone（cob_id = 0x80 + node_id） [实时接口] |
 
 ### 5.4 控制字控制（非阻塞）
@@ -370,7 +373,9 @@ AI、DI、DO 接口传入 `index >= 2` 时返回 `CanEvoError::kInvalidParam`。
 
 ### 5.5 状态查询辅助（非阻塞，从PDO缓存读取）
 
-内部从 TxPDO0 缓存读取状态字并解析，无需传入状态字参数。适用于实时控制循环。
+内部从已解析的工程量快照读取状态字位，无需传入状态字参数，不再解码 PDO 或换算单位。
+PDO 有效期取初始化时的总线配置，默认 50 ms；反馈不可用时，伺服状态返回 kInit，
+模式返回原有缺省值 kCsp。需要识别通信失败时，应检查 `RtGetJointStatus()` 的返回码。
 
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
@@ -447,12 +452,44 @@ AI、DI、DO 接口传入 `index >= 2` 时返回 `CanEvoError::kInvalidParam`。
 | 62 | `NrtGetCtrlParam(sub)` | `sub`: 子索引（const uint8_t，0x00~0x0A） | `uint16_t` — 参数值，失败返回 0 | 0x07/sub 通用读取控制器参数 [非实时接口] |
 | 63 | `NrtSetCtrlParam(sub, val)` | `sub`: 子索引（const uint8_t，0x00~0x0A）<br>`val`: 写入值（const uint16_t） | `int` — CanEvoError::kOk 成功 | 0x07/sub 通用写入控制器参数 [非实时接口] |
 
-### 5.10 SDO 编码器参数（阻塞，Index 0x08）
+### 5.10 SDO 编码器及摩擦参数、力矩系数（阻塞，Index 0x08 / 0x1F）
 
 | 序号 | 接口名字 | 参数 | 返回值 | 说明 |
 |------|---------|------|--------|------|
 | 64 | `NrtGetMotorEncRes()` | 无 | `uint32_t` — 分辨率，单位：Pulse/Rev | 0x08/0x00 读取电机轴编码器分辨率（R） [非实时接口] |
 | 65 | `NrtGetOutputEncRes()` | 无 | `uint32_t` — 分辨率，单位：Pulse/Rev | 0x08/0x01 读取输出轴编码器分辨率（R） [非实时接口] |
+
+摩擦参数通过 `index` 逐项访问，`index` 取值 `0~6`，对应子索引 `0x08/0x08~0x0E`。协议数据为 `uint16_t`：读取时除以 `1000.0f`；设置时乘以 `1000.0f`，四舍五入到最近整数后写入，分辨率为 `0.001`。
+
+| 接口名字 | 参数 | 返回值 | 说明 |
+|---------|------|--------|------|
+| `NrtGetFrictionParam(index)` | `index`: const uint8_t，参数编号 0~6 | `float` — 原始值 / 1000；index 越界或 SDO 读取失败返回 `0.0f` | 读取 0x08/(0x08+index) [非实时接口] |
+| `NrtSetFrictionParam(index, value)` | `index`: const uint8_t，0~6<br>`value`: const float，0.0f~65.535f | `int` — 成功 kOk；index 越界、NaN、无穷值或超范围返回 kInvalidParam；其他错误透传 SDO 返回码 | 写入 0x08/(0x08+index)，协议数据为 uint16_t [非实时接口] |
+| `NrtGetTorqueCoefficient()` | 无 | `float` — 力矩系数，单位：N·m/A | 0x1F/0x03，读取协议 float 原值，无缩放；SDO 失败返回 0.0f [非实时接口] |
+
+```cpp
+// joint 为已初始化的 modi_joint_canevo 实例。
+// index 0~6 对应子索引 0x08~0x0E。
+const int ret = joint.NrtSetFrictionParam(0, 1.234f);  // 写入原始值 1234
+if (ret != static_cast<int>(CanEvoError::kOk)) {
+  // 处理参数错误或 SDO 通信错误。
+}
+const float friction0 = joint.NrtGetFrictionParam(0);  // 原始值 1234 → 1.234f
+const float torque_coefficient = joint.NrtGetTorqueCoefficient();  // N·m/A
+```
+
+单关节完整读-写-保存-读校验示例：
+
+```bash
+example_single_joint_friction_param_roundtrip can0 1 1.234 0.100 0.200 0.300 0.400 0.000 0.000
+```
+
+参数依次对应 CAN 接口、关节 Node ID 和 p0~p6。程序先打印原值，再按命令行参数
+写入全部七项，随后触发 flash 保存（0x01/0xF0）并轮询保存成功标志（0x01/0xF1，
+最多等 3s），最后回读验证。它会覆盖目标关节的摩擦参数且**掉电保持**；请确认
+CAN 接口及 Node ID，并先备份原参数。固件以 0.001 为步进量化，校验按量化后的值比较。
+
+`NrtGetFrictionParam` 失败时返回 `0.0f`，与合法零值无法仅凭返回值区分（与 `NrtGetTorqueCoefficient` 一致）；需要判定读取失败时请调用方自行比对多次结果或改用 SDO 原始接口。每个关节实例独立访问其绑定的节点；多个关节分别调用即可。逐项调用时每次接口调用对应一次 SDO 操作，不保证设备端原子写入。
 
 ### 5.11 SDO PP 模式轮廓参数（阻塞，Index 0x21）
 
@@ -564,6 +601,8 @@ AI、DI、DO 接口传入 `index >= 2` 时返回 `CanEvoError::kInvalidParam`。
 | 0x07 | 0x00~0x0A | 控制器参数 | uint16 | RW | `NrtGetCtrlParam()` / `NrtSetCtrlParam()` |
 | 0x08 | 0x00 | 电机轴编码器分辨率 | uint32 | R | `NrtGetMotorEncRes()` |
 | 0x08 | 0x01 | 输出轴编码器分辨率 | uint32 | R | `NrtGetOutputEncRes()` |
+| 0x08 | 0x08~0x0E | 关节摩擦参数 0~6 | uint16（原始值 / 1000） | RW | `NrtGetFrictionParam(index)` / `NrtSetFrictionParam(index, value)` |
+| 0x1F | 0x03 | [MIT模式]力矩系数 | float，N·m/A | RW（SDK 提供读取） | `NrtGetTorqueCoefficient()` |
 | 0x20 | 0x00 | 实际位置 | float | R | `NrtGetActualPosition()` |
 | 0x20 | 0x01 | 实际速度 | float | R | `NrtGetActualVelocity()` |
 | 0x20 | 0x02 | 实际转矩电流 | float | R | `NrtGetActualCurrent()` |
