@@ -2,7 +2,8 @@
  * @file example_rt_thread.cpp
  * @brief 外部实时线程时间戳采样示例
  *
- * 该示例不实例化 SDK、不访问 CAN。实时线程只按固定周期缓存
+ * 该示例直接调用 POSIX 线程和时钟接口，不创建总线、不访问 CAN。
+ * 实时线程只按固定周期缓存
  * CLOCK_MONOTONIC 纳秒时间戳，运行 30 秒后退出，主线程写 CSV 文件。
  */
 
@@ -16,20 +17,6 @@
 #include <fstream>
 #include <iostream>
 #include <string>
-
-#ifndef CANEVO_HAVE_NECRO
-#define CANEVO_HAVE_NECRO 0
-#endif
-
-#if CANEVO_HAVE_NECRO
-#include <qiuniu/init.h>
-#include <qiuniu/wrappers.h>
-#else
-#ifndef __RT
-#define __RT(expr) (expr)
-#endif
-inline void qiuniu_init() {}
-#endif
 
 namespace {
 
@@ -62,19 +49,19 @@ timespec AddNs(timespec current, long ns) {
 
 void* RtLoop(void*) {
   timespec next_wakeup{};
-  __RT(clock_gettime(CLOCK_MONOTONIC, &next_wakeup));
+  clock_gettime(CLOCK_MONOTONIC, &next_wakeup);
 
   const long period_ns = kPeriodUs * 1000L;
   int i = 0;
   while (true) {
     // 使用系统绝对时钟 sleep，避免时钟飘移
     next_wakeup = AddNs(next_wakeup, period_ns);
-    const int sleep_ret = __RT(
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, nullptr));
+    const int sleep_ret =
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, nullptr);
     if (sleep_ret != 0 || i >= kSampleCapacity) break;
 
     timespec wakeup{};
-    __RT(clock_gettime(CLOCK_MONOTONIC, &wakeup));
+    clock_gettime(CLOCK_MONOTONIC, &wakeup);
     g_samples[i] = ToNs(wakeup);
     i++;
     g_sample_count.store(i, std::memory_order_release);
@@ -99,11 +86,6 @@ bool WriteCsv(const std::string& path, const int64_t* samples, int count) {
 
 int main() {
   std::cout << "\n========== 示例: 实时线程配置 ==========\n" << std::endl;
-  qiuniu_init();
-
-  std::cout << "NIIC hard realtime: "
-            << (CANEVO_HAVE_NECRO ? "ON (__RT -> qiuniu)" : "OFF (POSIX)")
-            << std::endl;
 
   // 1. 禁止内存交换
   if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
@@ -155,9 +137,9 @@ int main() {
 
   // 6. 创建实时线程，RtLoop 为子线程入口
   pthread_t thread{};
-  const int create_ret = __RT(pthread_create(&thread, &attr, RtLoop, nullptr));
+  const int create_ret = pthread_create(&thread, &attr, RtLoop, nullptr);
   if (create_ret == 0) {
-    __RT(pthread_setname_np(thread, "canevo_rt_jitter"));
+    pthread_setname_np(thread, "canevo_rt_jitter");
   }
   pthread_attr_destroy(&attr);
 
@@ -167,7 +149,7 @@ int main() {
   }
 
   // 7. 等待实时线程执行完毕
-  __RT(pthread_join(thread, nullptr));
+  pthread_join(thread, nullptr);
 
   const int sample_count = g_sample_count.load(std::memory_order_acquire);
 

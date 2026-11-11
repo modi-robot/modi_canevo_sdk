@@ -93,6 +93,16 @@ ip -details link show can0
 
 降低 `txqueuelen` 可以减少内核发送队列积压，使报文发送时间更接近控制线程的调度点。多关节报文较多时，可以对比 `txqueuelen 1`、`2`、`4` 的总线实际抖动，最终以示波器或逻辑分析仪的测量结果为准。更完整的配置参见[《CanEvo 实时系统安装、配置与验证指南》](CanEvo实时系统配置指南.md)。
 
+### 2.4 POSIX 实时线程
+
+SDK 和示例统一使用标准 POSIX 线程与时钟 API，不需要 NIIC/Necro 开发包或运行库。
+线程直接通过 `pthread_create`、`pthread_join`、`pthread_setschedparam` 和
+`pthread_setname_np` 操作；周期控制直接使用 `clock_gettime`、`clock_nanosleep`。
+无需额外初始化实时后端，也没有 NIIC 专用构建开关或动态库。
+
+实时调度、CPU 亲和性和内存锁定仍需具备相应权限及有效配置。
+对实时性有严格要求时，使用 PREEMPT_RT 内核并按实时系统配置指南调整系统。
+
 ---
 
 ## 3. 软件包获取与解压

@@ -58,6 +58,10 @@ CanEvo SDK 基于 SocketCAN，提供关节发现、参数读写、状态查询�
 
 对实时控制有严格要求时，建议使用 PREEMPT_RT 内核并完成 CPU 隔离和 IRQ 亲和性配置，具体方法参见[实时系统配置指南](docs/CanEvo实时系统配置指南.md)。
 
+SDK 和示例统一使用标准 POSIX 线程与时钟 API，不依赖 NIIC/Necro。
+实时线程通过 `pthread_create`、`pthread_setschedparam` 等接口配置，周期等待
+使用 `clock_nanosleep`。实时调度权限、CPU 亲和性和内存锁定要求仍需按运行环境配置。
+
 ## 下载 SDK
 
 前往 **[GitHub Releases](https://github.com/modi-robot/modi_canevo_sdk/releases)** 下载最新发布包。

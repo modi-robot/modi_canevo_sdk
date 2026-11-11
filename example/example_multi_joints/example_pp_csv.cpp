@@ -26,20 +26,6 @@
 
 #include "modi_joint_canevo.h"
 
-#ifndef CANEVO_HAVE_NECRO
-#define CANEVO_HAVE_NECRO 0
-#endif
-
-#if CANEVO_HAVE_NECRO
-#include <qiuniu/init.h>
-#include <qiuniu/wrappers.h>
-#else
-#ifndef __RT
-#define __RT(expr) (expr)
-#endif
-inline void qiuniu_init() {}
-#endif
-
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kDegToRad = kPi / 180.0f;
 
@@ -155,15 +141,15 @@ void DisableAndDestroyAll(std::vector<modi_joint_canevo>& joints,
 
 void* RtLoop(void*) {
   timespec next_wakeup{};
-  __RT(clock_gettime(CLOCK_MONOTONIC, &next_wakeup));
+  clock_gettime(CLOCK_MONOTONIC, &next_wakeup);
 
   const long period_ns = g_period_us * 1000L;
   const int ok = static_cast<int>(CanEvoError::kOk);
 
   while (g_run_state.load(std::memory_order_acquire) != RunState::kRtExit) {
     next_wakeup = AddNs(next_wakeup, period_ns);
-    const int sleep_ret = __RT(
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, nullptr));
+    const int sleep_ret =
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, nullptr);
     if (sleep_ret != 0) {
       g_rt_ret.store(sleep_ret, std::memory_order_release);
       break;
@@ -235,11 +221,6 @@ int main() {
   std::cout << "PP + CSV 混合测试: 1/3/5/7=PP, 2/4/6/8=CSV" << std::endl;
   std::cout << "PP: 当前位置附近 ±10°, CSV: ±30° 内 3°/s 往复" << std::endl;
   std::cout << "========================================" << std::endl;
-
-  qiuniu_init();
-  std::cout << "NIIC hard realtime: "
-            << (CANEVO_HAVE_NECRO ? "ON (__RT -> qiuniu)" : "OFF (POSIX)")
-            << std::endl;
 
   if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
     std::cerr << "警告: mlockall 失败，实时抖动可能增大" << std::endl;
@@ -443,10 +424,9 @@ int main() {
   }
 
   pthread_t rt_thread{};
-  const int create_ret =
-      __RT(pthread_create(&rt_thread, &attr, RtLoop, nullptr));
+  const int create_ret = pthread_create(&rt_thread, &attr, RtLoop, nullptr);
   if (create_ret == 0) {
-    __RT(pthread_setname_np(rt_thread, "pp_csv_mix"));
+    pthread_setname_np(rt_thread, "pp_csv_mix");
   }
   pthread_attr_destroy(&attr);
 
@@ -473,7 +453,7 @@ int main() {
   }
 
   g_run_state.store(RunState::kRtExit, std::memory_order_release);
-  __RT(pthread_join(rt_thread, nullptr));
+  pthread_join(rt_thread, nullptr);
 
   DisableAndDestroyAll(joints, bus);
 

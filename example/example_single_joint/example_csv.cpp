@@ -32,20 +32,6 @@
 
 #include "modi_joint_canevo.h"
 
-#ifndef CANEVO_HAVE_NECRO
-#define CANEVO_HAVE_NECRO 0
-#endif
-
-#if CANEVO_HAVE_NECRO
-#include <qiuniu/init.h>
-#include <qiuniu/wrappers.h>
-#else
-#ifndef __RT
-#define __RT(expr) (expr)
-#endif
-inline void qiuniu_init() {}
-#endif
-
 constexpr float kDegToRad = static_cast<float>(M_PI) / 180.0f;
 constexpr float kCsvSpeedRadS = 3.0f * kDegToRad;
 constexpr float kCsvMinPosRad = -30.0f * kDegToRad;
@@ -80,7 +66,7 @@ timespec AddNs(timespec current, long ns) {
 
 void* RtLoop(void*) {
   timespec next_wakeup{};
-  __RT(clock_gettime(CLOCK_MONOTONIC, &next_wakeup));
+  clock_gettime(CLOCK_MONOTONIC, &next_wakeup);
 
   const long period_ns = g_period_us * 1000L;
   float vel_rad_s = kCsvSpeedRadS;
@@ -93,8 +79,8 @@ void* RtLoop(void*) {
 
   while (g_run_state.load(std::memory_order_acquire) != RunState::kRtExit) {
     next_wakeup = AddNs(next_wakeup, period_ns);
-    const int sleep_ret = __RT(
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, nullptr));
+    const int sleep_ret =
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, nullptr);
     if (sleep_ret != 0) {
       g_rt_ret.store(sleep_ret, std::memory_order_release);
       break;
@@ -197,10 +183,6 @@ int main(int argc, char* argv[]) {
   std::cout << "========================================" << std::endl;
   std::cout << "CSV 测试程序 - 在 ±30° 内以 3°/s 往复运动" << std::endl;
   std::cout << "========================================" << std::endl;
-  qiuniu_init();
-  std::cout << "NIIC hard realtime: "
-            << (CANEVO_HAVE_NECRO ? "ON (__RT -> qiuniu)" : "OFF (POSIX)")
-            << std::endl;
 
   // 1. 禁止内存交换
   if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
@@ -370,10 +352,9 @@ int main(int argc, char* argv[]) {
 
   // 14. CSV Running 后再创建实时线程
   pthread_t rt_thread{};
-  const int create_ret =
-      __RT(pthread_create(&rt_thread, &attr, RtLoop, nullptr));
+  const int create_ret = pthread_create(&rt_thread, &attr, RtLoop, nullptr);
   if (create_ret == 0) {
-    __RT(pthread_setname_np(rt_thread, "canevo_csv_rt"));
+    pthread_setname_np(rt_thread, "canevo_csv_rt");
   }
   pthread_attr_destroy(&attr);
   if (create_ret != 0) {
@@ -407,7 +388,7 @@ int main(int argc, char* argv[]) {
   }
 
   g_run_state.store(RunState::kRtExit, std::memory_order_release);
-  __RT(pthread_join(rt_thread, nullptr));
+  pthread_join(rt_thread, nullptr);
   PrintEndTime();
 
   const int rt_ret = g_rt_ret.load(std::memory_order_acquire);
