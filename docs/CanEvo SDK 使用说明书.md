@@ -146,7 +146,7 @@ cd "${SDK_ROOT}"
 modi_canevo_sdk_<版本>_<平台>_<架构>_<Git短提交>/
 ├── include/                 # SDK 头文件
 ├── lib/                     # SDK 动态库
-│   ├── libcanevo_sdk_x86.so
+│   ├── libmodi_canevo_sdk.so
 │   ├── runtime/             # 随包运行时库
 │   └── cmake/
 ├── docs/                    # 文档
@@ -419,8 +419,8 @@ cmake --build build -j$(nproc)
 业务工程的 `CMakeLists.txt` 使用：
 
 ```cmake
-find_package(canevo_sdk_x86 REQUIRED)
-target_link_libraries(your_target PRIVATE canevo_sdk_x86::canevo_sdk_x86)
+find_package(modi_canevo_sdk REQUIRED)
+target_link_libraries(your_target PRIVATE modi_canevo_sdk::modi_canevo_sdk)
 ```
 
 ---

@@ -51,17 +51,17 @@ project(canevo_first_app LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(canevo_sdk_x86 CONFIG REQUIRED)
+find_package(modi_canevo_sdk CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 
 add_executable(canevo_first_app main.cpp)
 target_link_libraries(canevo_first_app PRIVATE
-    canevo_sdk_x86::canevo_sdk_x86
+    modi_canevo_sdk::modi_canevo_sdk
     Threads::Threads
 )
 ```
 
-`canevo_sdk_x86` 是当前 SDK 的 CMake 包名，在 x86_64 和 ARM64 发布包中使用方式相同。
+`modi_canevo_sdk` 是当前 SDK 的 CMake 包名，在 x86_64 和 ARM64 发布包中使用方式相同。
 
 ## 3. 第一个程序：扫描并读取关节状态
 

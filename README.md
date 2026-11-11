@@ -47,6 +47,8 @@ CanEvo SDK 基于 SocketCAN，提供关节发现、参数读写、状态查询�
 
 ## 支持环境
 
+源码仓库提供 Docker 构建、SSH 部署和运行入口：`docker/compose.sh`，说明见源码仓库的 `docker/README.md`。支持在 x86_64 主机原生构建 x86_64 包和交叉编译 ARM64 包，CI 复用相同 Compose 配置。
+
 | 项目 | 要求 |
 | --- | --- |
 | 操作系统 | Linux |
